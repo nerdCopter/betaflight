@@ -151,8 +151,17 @@
 #undef USE_TELEMETRY_SRXL
 
 #ifdef USE_SERIALRX_FPORT
+#ifndef USE_TELEMETRY
 #define USE_TELEMETRY
 #endif
+#ifndef USE_TELEMETRY_SMARTPORT
+#define USE_TELEMETRY_SMARTPORT
+#endif
+#endif
+#endif
+
+#if defined(USE_TELEMETRY_IBUS_EXTENDED) && !defined(USE_TELEMETRY_IBUS)
+#define USE_TELEMETRY_IBUS
 #endif
 
 #if !defined(USE_SERIALRX_CRSF)
@@ -231,6 +240,10 @@
 // Some target doesn't define USE_ADC which USE_ADC_INTERNAL depends on
 #ifndef USE_ADC
 #undef USE_ADC_INTERNAL
+#endif
+
+#if (defined(USE_SDCARD) || defined(USE_FLASH)) && !defined(USE_BLACKBOX)
+#define USE_BLACKBOX
 #endif
 
 #ifdef USE_FLASH
