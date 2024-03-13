@@ -1,0 +1,13 @@
+name: Auto close bad PR
+
+on:
+  pull_request:
+    branches:
+      - master
+      - '*-maintenance'
+
+jobs:
+  close:
+    name: autoclose
+    if: ${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}} == 'master'
+    run: gh pr close --comment "Auto-closing pull request because the branch is named `master`. Please create a feature branch instead. https://betaflight.com/docs/development#using-git-and-github"
