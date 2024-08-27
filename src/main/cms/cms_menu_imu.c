@@ -263,9 +263,10 @@ static uint8_t cmsx_simplified_gyro_filter;
 static uint8_t cmsx_simplified_gyro_filter_multiplier;
 static uint8_t cmsx_tpa_rate;
 static uint16_t cmsx_tpa_breakpoint;
-static uint8_t cmsx_tpa_low_rate;
+static int8_t cmsx_tpa_low_rate;
 static uint16_t cmsx_tpa_low_breakpoint;
 static uint8_t cmsx_tpa_low_always;
+static uint8_t cmsx_landing_disarm_threshold;
 
 static const void *cmsx_simplifiedTuningOnEnter(displayPort_t *pDisp)
 {
@@ -552,7 +553,7 @@ static uint8_t cmsx_feedforward_jitter_factor;
 
 static uint8_t cmsx_tpa_rate;
 static uint16_t cmsx_tpa_breakpoint;
-static uint8_t cmsx_tpa_low_rate;
+static int8_t cmsx_tpa_low_rate;
 static uint16_t cmsx_tpa_low_breakpoint;
 static uint8_t cmsx_tpa_low_always;
 
@@ -610,7 +611,7 @@ static const void *cmsx_profileOtherOnEnter(displayPort_t *pDisp)
     cmsx_tpa_low_rate = pidProfile->tpa_low_rate;
     cmsx_tpa_low_breakpoint = pidProfile->tpa_low_breakpoint;
     cmsx_tpa_low_always = pidProfile->tpa_low_always;
-
+    cmsx_landing_disarm_threshold = pidProfile->landing_disarm_threshold;
     return NULL;
 }
 
@@ -668,6 +669,7 @@ static const void *cmsx_profileOtherOnExit(displayPort_t *pDisp, const OSD_Entry
     pidProfile->tpa_low_rate = cmsx_tpa_low_rate;
     pidProfile->tpa_low_breakpoint = cmsx_tpa_low_breakpoint;
     pidProfile->tpa_low_always = cmsx_tpa_low_always;
+    pidProfile->landing_disarm_threshold = cmsx_landing_disarm_threshold;
 
     initEscEndpoints();
     return NULL;
@@ -725,9 +727,10 @@ static const OSD_Entry cmsx_menuProfileOtherEntries[] = {
 
     { "TPA RATE",      OME_FLOAT,  NULL, &(OSD_FLOAT_t) { &cmsx_tpa_rate, 0, 100, 1, 10} },
     { "TPA BRKPT",     OME_UINT16, NULL, &(OSD_UINT16_t){ &cmsx_tpa_breakpoint, 1000, 2000, 10} },
-    { "TPA LOW RATE",  OME_FLOAT,  NULL, &(OSD_FLOAT_t) { &cmsx_tpa_low_rate, 0, 100, 1, 10} },
+    { "TPA LOW RATE",  OME_INT8,   NULL, &(OSD_INT8_t) { &cmsx_tpa_low_rate, TPA_LOW_RATE_MIN, TPA_MAX , 1} },
     { "TPA LOW BRKPT", OME_UINT16, NULL, &(OSD_UINT16_t){ &cmsx_tpa_low_breakpoint, 1000, 2000, 10} },
-    { "TPA LOW ALWYS", OME_UINT8,  NULL, &(OSD_UINT8_t) { &cmsx_tpa_low_always, 0, 1, 1} },
+    { "TPA LOW ALWYS", OME_Bool,   NULL, &cmsx_tpa_low_always },
+    { "EZDISARM THR",  OME_UINT8,  NULL, &(OSD_UINT8_t) { &cmsx_landing_disarm_threshold, 0, 150, 1} },
 
     { "BACK", OME_Back, NULL, NULL },
     { NULL, OME_END, NULL, NULL}

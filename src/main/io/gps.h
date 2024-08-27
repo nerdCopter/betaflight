@@ -292,7 +292,6 @@ typedef struct gpsData_s {
     bool ubloxM8orAbove;
     bool ubloxM9orAbove;
     bool ubloxUsingFlightModel;     // false = Acquire model, true = Flight model
-    bool satMessagesDisabled;
 #ifdef USE_GPS_UBLOX
     uint32_t lastNavSolTs;          // time stamp of last UBCX message.  Used to calculate message delta
     ubloxVersion_e platformVersion; // module platform version, mapped from reported hardware version
@@ -382,7 +381,9 @@ extern uint32_t dashboardGpsNavSvInfoRcvCount;                  // Count of time
 
 #ifdef USE_GPS_UBLOX
 ubloxVersion_e ubloxParseVersion(const uint32_t version);
+void setSatInfoMessageRate(uint8_t divisor);
 #endif
+
 void gpsInit(void);
 void gpsUpdate(timeUs_t currentTimeUs);
 bool gpsNewFrame(uint8_t c);
@@ -392,7 +393,7 @@ void gpsEnablePassthrough(struct serialPort_s *gpsPassthroughPort);
 void onGpsNewData(void);
 void GPS_reset_home_position(void);
 void GPS_calc_longitude_scaling(int32_t lat);
-void GPS_distance_cm_bearing(int32_t *currentLat1, int32_t *currentLon1, int32_t *destinationLat2, int32_t *destinationLon2, uint32_t *dist, int32_t *bearing);
+void GPS_distance_cm_bearing(const int32_t *currentLat1, const int32_t *currentLon1, const int32_t *destinationLat2, const int32_t *destinationLon2, uint32_t *dist, int32_t *bearing);
 void gpsSetFixState(bool state);
 float getGpsDataIntervalSeconds(void);      // sends GPS Nav Data interval to GPS Rescue
 baudRate_e getGpsPortActualBaudRateIndex(void);

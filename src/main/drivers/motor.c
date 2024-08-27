@@ -297,7 +297,7 @@ bool isMotorProtocolDshot(void)
 
 bool isMotorProtocolBidirDshot(void)
 {
-    return isMotorProtocolDshot() && motorConfig()->dev.useDshotTelemetry;
+    return isMotorProtocolDshot() && useDshotTelemetry;
 }
 
 void motorDevInit(const motorDevConfig_t *motorDevConfig, uint16_t idlePulse, uint8_t motorCount)
@@ -380,7 +380,7 @@ timeMs_t motorGetMotorEnableTimeMs(void)
 #ifdef USE_DSHOT_BITBANG
 bool isDshotBitbangActive(const motorDevConfig_t *motorDevConfig)
 {
-#ifdef STM32F4
+#if defined(STM32F4) || defined(APM32F4)
     return motorDevConfig->useDshotBitbang == DSHOT_BITBANG_ON ||
         (motorDevConfig->useDshotBitbang == DSHOT_BITBANG_AUTO && motorDevConfig->useDshotTelemetry && motorDevConfig->motorPwmProtocol != PWM_TYPE_PROSHOT1000);
 #else

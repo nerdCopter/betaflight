@@ -86,6 +86,7 @@
 #include "sensors/battery.h"
 #include "sensors/compass.h"
 #include "sensors/gyro.h"
+#include "sensors/gyro_init.h"
 #include "sensors/rangefinder.h"
 
 #if !defined(DEFAULT_BLACKBOX_DEVICE)
@@ -277,7 +278,7 @@ static const blackboxConditionalFieldDefinition_t blackboxGpsGFields[] = {
     {"GPS_numSat",        -1, UNSIGNED, PREDICT(0),          ENCODING(UNSIGNED_VB), CONDITION(ALWAYS)},
     {"GPS_coord",          0, SIGNED,   PREDICT(HOME_COORD), ENCODING(SIGNED_VB),   CONDITION(ALWAYS)},
     {"GPS_coord",          1, SIGNED,   PREDICT(HOME_COORD), ENCODING(SIGNED_VB),   CONDITION(ALWAYS)},
-    {"GPS_altitude",      -1, UNSIGNED, PREDICT(0),          ENCODING(UNSIGNED_VB), CONDITION(ALWAYS)},
+    {"GPS_altitude",      -1, SIGNED,   PREDICT(0),          ENCODING(SIGNED_VB),   CONDITION(ALWAYS)},
     {"GPS_speed",         -1, UNSIGNED, PREDICT(0),          ENCODING(UNSIGNED_VB), CONDITION(ALWAYS)},
     {"GPS_ground_course", -1, UNSIGNED, PREDICT(0),          ENCODING(UNSIGNED_VB), CONDITION(ALWAYS)}
 };
@@ -469,7 +470,7 @@ static bool testBlackboxConditionUncached(FlightLogFieldCondition condition)
     case CONDITION(MOTOR_6_HAS_RPM):
     case CONDITION(MOTOR_7_HAS_RPM):
     case CONDITION(MOTOR_8_HAS_RPM):
-        return (getMotorCount() >= condition - CONDITION(MOTOR_1_HAS_RPM) + 1) && (motorConfig()->dev.useDshotTelemetry) && isFieldEnabled(FIELD_SELECT(RPM));
+        return (getMotorCount() >= condition - CONDITION(MOTOR_1_HAS_RPM) + 1) && useDshotTelemetry && isFieldEnabled(FIELD_SELECT(RPM));
 #endif
 
     case CONDITION(TRICOPTER):
@@ -1110,8 +1111,14 @@ static void writeGPSFrame(timeUs_t currentTimeUs)
     blackboxWriteUnsignedVB(gpsSol.numSat);
     blackboxWriteSignedVB(gpsSol.llh.lat - gpsHistory.GPS_home[GPS_LATITUDE]);
     blackboxWriteSignedVB(gpsSol.llh.lon - gpsHistory.GPS_home[GPS_LONGITUDE]);
-    blackboxWriteUnsignedVB(gpsSol.llh.altCm / 10); // was originally designed to transport meters in int16, but +-3276.7m is a good compromise
-    blackboxWriteUnsignedVB(gpsSol.groundSpeed);
+    blackboxWriteSignedVB(gpsSol.llh.altCm / 10);  // log altitude in increments of 0.1m
+
+    if (gpsConfig()->gps_use_3d_speed) {
+        blackboxWriteUnsignedVB(gpsSol.speed3d);
+    } else {
+        blackboxWriteUnsignedVB(gpsSol.groundSpeed);
+    }
+
     blackboxWriteUnsignedVB(gpsSol.groundCourse);
 
     gpsHistory.GPS_numSat = gpsSol.numSat;
@@ -1358,9 +1365,10 @@ static bool blackboxWriteSysinfo(void)
 
     const controlRateConfig_t *currentControlRateProfile = controlRateProfiles(systemConfig()->activeRateProfile);
     switch (xmitState.headerIndex) {
-        BLACKBOX_PRINT_HEADER_LINE("Firmware type", "%s",                   "Cleanflight");
+        BLACKBOX_PRINT_HEADER_LINE("Firmware type", "%s",                   "Betaflight");
         BLACKBOX_PRINT_HEADER_LINE("Firmware revision", "%s %s (%s) %s",    FC_FIRMWARE_NAME, FC_VERSION_STRING, shortGitRevision, targetName);
         BLACKBOX_PRINT_HEADER_LINE("Firmware date", "%s %s",                buildDate, buildTime);
+        BLACKBOX_PRINT_HEADER_LINE("DeviceUID", "%08x%08x%08x",             U_ID_0, U_ID_1, U_ID_2);
 #ifdef USE_BOARD_INFO
         BLACKBOX_PRINT_HEADER_LINE("Board information", "%s %s",            getManufacturerId(), getBoardName());
 #endif
@@ -1410,6 +1418,20 @@ static bool blackboxWriteSysinfo(void)
         BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_MIXER_TYPE, "%s",             lookupTableMixerType[mixerConfig()->mixer_type]);
         BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_EZ_LANDING_THRESHOLD, "%d",   currentPidProfile->ez_landing_threshold);
         BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_EZ_LANDING_LIMIT, "%d",       currentPidProfile->ez_landing_limit);
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_EZ_LANDING_SPEED, "%d",       currentPidProfile->ez_landing_speed);
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_LANDING_DISARM_THRESHOLD, "%d", currentPidProfile->landing_disarm_threshold);
+
+#ifdef USE_WING
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_SPA_ROLL_CENTER, "%d",        currentPidProfile->spa_center[FD_ROLL]);
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_SPA_ROLL_WIDTH, "%d",         currentPidProfile->spa_width[FD_ROLL]);
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_SPA_ROLL_MODE, "%d",          currentPidProfile->spa_mode[FD_ROLL]);
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_SPA_PITCH_CENTER, "%d",       currentPidProfile->spa_center[FD_PITCH]);
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_SPA_PITCH_WIDTH, "%d",        currentPidProfile->spa_width[FD_PITCH]);
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_SPA_PITCH_MODE, "%d",         currentPidProfile->spa_mode[FD_PITCH]);
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_SPA_YAW_CENTER, "%d",         currentPidProfile->spa_center[FD_YAW]);
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_SPA_YAW_WIDTH, "%d",          currentPidProfile->spa_width[FD_YAW]);
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_SPA_YAW_MODE, "%d",           currentPidProfile->spa_mode[FD_YAW]);
+#endif
 
         BLACKBOX_PRINT_HEADER_LINE("rc_rates", "%d,%d,%d",                  currentControlRateProfile->rcRates[ROLL],
                                                                             currentControlRateProfile->rcRates[PITCH],
@@ -1486,6 +1508,8 @@ static bool blackboxWriteSysinfo(void)
         BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_FEEDFORWARD_MAX_RATE_LIMIT, "%d", currentPidProfile->feedforward_max_rate_limit);
         BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_ANGLE_FEEDFORWARD, "%d",          currentPidProfile->pid[PID_LEVEL].F);
         BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_ANGLE_FF_SMOOTHING_MS, "%d",      currentPidProfile->angle_feedforward_smoothing_ms);
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_FEEDFORWARD_YAW_HOLD_GAIN, "%d",  currentPidProfile->feedforward_yaw_hold_gain);
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_FEEDFORWARD_YAW_HOLD_TIME, "%d",  currentPidProfile->feedforward_yaw_hold_time);
 #endif
         BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_ANGLE_LIMIT, "%d",                currentPidProfile->angle_limit);
         BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_ANGLE_EARTH_REF, "%d",            currentPidProfile->angle_earth_ref);
@@ -1496,6 +1520,13 @@ static bool blackboxWriteSysinfo(void)
         BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_ACC_LIMIT, "%d",              currentPidProfile->rateAccelLimit);
         BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_PIDSUM_LIMIT, "%d",           currentPidProfile->pidSumLimit);
         BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_PIDSUM_LIMIT_YAW, "%d",       currentPidProfile->pidSumLimitYaw);
+
+#ifdef USE_WING
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_S_ROLL,  "%d", currentPidProfile->pid[PID_ROLL].S);
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_S_PITCH, "%d", currentPidProfile->pid[PID_PITCH].S);
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_S_YAW,   "%d", currentPidProfile->pid[PID_YAW].S);
+#endif // #ifdef USE_WING
+
         // End of Betaflight controller parameters
 
         BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_DEADBAND, "%d",               rcControlsConfig()->deadband);
@@ -1516,6 +1547,7 @@ static bool blackboxWriteSysinfo(void)
         BLACKBOX_PRINT_HEADER_LINE("gyro_notch_cutoff", "%d,%d",            gyroConfig()->gyro_soft_notch_cutoff_1,
                                                                             gyroConfig()->gyro_soft_notch_cutoff_2);
         BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_GYRO_TO_USE, "%d",            gyroConfig()->gyro_to_use);
+        BLACKBOX_PRINT_HEADER_LINE("gyro_debug_axis", "%d",                 gyroConfig()->gyro_filter_debug_axis);
 #ifdef USE_DYN_NOTCH_FILTER
         BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_DYN_NOTCH_MAX_HZ, "%d",       dynNotchConfig()->dyn_notch_max_hz);
         BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_DYN_NOTCH_COUNT, "%d",        dynNotchConfig()->dyn_notch_count);
@@ -1523,7 +1555,7 @@ static bool blackboxWriteSysinfo(void)
         BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_DYN_NOTCH_MIN_HZ, "%d",       dynNotchConfig()->dyn_notch_min_hz);
 #endif
 #ifdef USE_DSHOT_TELEMETRY
-        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_DSHOT_BIDIR, "%d",            motorConfig()->dev.useDshotTelemetry);
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_DSHOT_BIDIR, "%d",            useDshotTelemetry);
         BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_MOTOR_POLES, "%d",            motorConfig()->motorPoleCount);
 #endif
 #ifdef USE_RPM_FILTER
@@ -1661,6 +1693,12 @@ static bool blackboxWriteSysinfo(void)
         BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_GPS_RESCUE_USE_MAG, "%d",         gpsRescueConfig()->useMag)
 #endif
 #endif
+#endif
+
+#ifdef USE_WING
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_TPA_DELAY_MS, "%d", currentPidProfile->tpa_delay_ms);
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_TPA_GRAVITY_THR0, "%d", currentPidProfile->tpa_gravity_thr0);
+        BLACKBOX_PRINT_HEADER_LINE(PARAM_NAME_TPA_GRAVITY_THR100, "%d", currentPidProfile->tpa_gravity_thr100);
 #endif
 
         default:
@@ -2065,7 +2103,7 @@ uint16_t blackboxGetPRatio(void)
 
 uint8_t blackboxCalculateSampleRate(uint16_t pRatio)
 {
-    return LOG2(32000 / (targetPidLooptime * pRatio));
+    return llog2(32000 / (targetPidLooptime * pRatio));
 }
 
 /**

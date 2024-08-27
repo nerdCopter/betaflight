@@ -78,7 +78,6 @@ extern "C" {
     PG_REGISTER(gpsRescueConfig_t, gpsRescueConfig, PG_GPS_RESCUE, 0);
     PG_REGISTER(positionConfig_t, positionConfig, PG_POSITION, 0);
 
-    float rcCommand[4];
     float rcData[MAX_SUPPORTED_RC_CHANNEL_COUNT];
     uint16_t averageSystemLoadPercent = 0;
     uint8_t cliMode = 0;
@@ -1161,4 +1160,5 @@ extern "C" {
         return 0.0f;
     }
     void getRcDeflectionAbs(void) {}
+    uint32_t getCpuPercentageLate(void) { return 0; };
 }

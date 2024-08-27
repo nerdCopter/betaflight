@@ -173,6 +173,14 @@ typedef enum {
 #define UBLOX_GNSS_ENABLE     0x1
 #define UBLOX_GNSS_DEFAULT_SIGCFGMASK 0x10000
 
+#define UBLOX_GNSS_GPS        0x00
+#define UBLOX_GNSS_SBAS       0x01
+#define UBLOX_GNSS_GALILEO    0x02
+#define UBLOX_GNSS_BEIDOU     0x03
+#define UBLOX_GNSS_IMES       0x04
+#define UBLOX_GNSS_QZSS       0x05
+#define UBLOX_GNSS_GLONASS    0x06
+
 typedef struct ubxHeader_s {
     uint8_t preamble1;
     uint8_t preamble2;
@@ -367,11 +375,6 @@ static void logErrorToPacketLog(void)
 }
 #endif  // USE_DASHBOARD
 
-static bool isConfiguratorConnected(void)
-{
-    return (getArmingDisableFlags() & ARMING_DISABLED_MSP);
-}
-
 static void gpsNewData(uint16_t c);
 #ifdef USE_GPS_NMEA
 static bool gpsNewFrameNMEA(char c);
@@ -395,7 +398,6 @@ void gpsInit(void)
     gpsDataIntervalSeconds = 0.1f;
     gpsData.userBaudRateIndex = 0;
     gpsData.timeouts = 0;
-    gpsData.satMessagesDisabled = false;
     gpsData.state_ts = millis();
 #ifdef USE_GPS_UBLOX
     gpsData.ubloxUsingFlightModel = false;
@@ -554,58 +556,63 @@ static void ubloxSendByteUpdateChecksum(const uint8_t data, uint8_t *checksumA, 
     serialWrite(gpsPort, data);
 }
 
-static void ubloxSendDataUpdateChecksum(const uint8_t *data, uint8_t len, uint8_t *checksumA, uint8_t *checksumB)
+static void ubloxSendDataUpdateChecksum(const ubxMessage_t *msg, uint8_t *checksumA, uint8_t *checksumB)
 {
+    // CRC includes msg_class, msg_id, length and payload
+    // length is payload length only
+    const uint8_t *data = (const uint8_t *)&msg->header.msg_class;
+    uint16_t len = msg->header.length + sizeof(msg->header.msg_class) + sizeof(msg->header.msg_id) + sizeof(msg->header.length);
+
     while (len--) {
         ubloxSendByteUpdateChecksum(*data, checksumA, checksumB);
         data++;
     }
 }
 
-static void ubloxSendMessage(const uint8_t *data, uint8_t len, bool skipAck)
+static void ubloxSendMessage(const ubxMessage_t *msg, bool skipAck)
 {
     uint8_t checksumA = 0, checksumB = 0;
-    serialWrite(gpsPort, data[0]);
-    serialWrite(gpsPort, data[1]);
-    ubloxSendDataUpdateChecksum(&data[2], len - 2, &checksumA, &checksumB);
+    serialWrite(gpsPort, msg->header.preamble1);
+    serialWrite(gpsPort, msg->header.preamble2);
+    ubloxSendDataUpdateChecksum(msg, &checksumA, &checksumB);
     serialWrite(gpsPort, checksumA);
     serialWrite(gpsPort, checksumB);
     // Save state for ACK waiting
-    gpsData.ackWaitingMsgId = data[3]; //save message id for ACK
+    gpsData.ackWaitingMsgId = msg->header.msg_id; //save message id for ACK
     gpsData.ackState = skipAck ? UBLOX_ACK_GOT_ACK : UBLOX_ACK_WAITING;
     gpsData.lastMessageSent = gpsData.now;
 }
 
 static void ubloxSendClassMessage(ubxProtocolBytes_e class_id, ubxProtocolBytes_e msg_id, uint16_t length)
 {
-    ubxMessage_t tx_buffer;
-    tx_buffer.header.preamble1 = PREAMBLE1;
-    tx_buffer.header.preamble2 = PREAMBLE2;
-    tx_buffer.header.msg_class = class_id;
-    tx_buffer.header.msg_id = msg_id;
-    tx_buffer.header.length = length;
-    ubloxSendMessage((const uint8_t *) &tx_buffer, length + 6, false);
+    ubxMessage_t msg;
+    msg.header.preamble1 = PREAMBLE1;
+    msg.header.preamble2 = PREAMBLE2;
+    msg.header.msg_class = class_id;
+    msg.header.msg_id = msg_id;
+    msg.header.length = length;
+    ubloxSendMessage(&msg, false);
 }
 
-static void ubloxSendConfigMessage(ubxMessage_t *message, uint8_t msg_id, uint8_t length, bool skipAck)
+static void ubloxSendConfigMessage(ubxMessage_t *msg, uint8_t msg_id, uint8_t length, bool skipAck)
 {
-    message->header.preamble1 = PREAMBLE1;
-    message->header.preamble2 = PREAMBLE2;
-    message->header.msg_class = CLASS_CFG;
-    message->header.msg_id = msg_id;
-    message->header.length = length;
-    ubloxSendMessage((const uint8_t *) message, length + 6, skipAck);
+    msg->header.preamble1 = PREAMBLE1;
+    msg->header.preamble2 = PREAMBLE2;
+    msg->header.msg_class = CLASS_CFG;
+    msg->header.msg_id = msg_id;
+    msg->header.length = length;
+    ubloxSendMessage(msg, skipAck);
 }
 
 static void ubloxSendPollMessage(uint8_t msg_id)
 {
-    ubxMessage_t tx_buffer;
-    tx_buffer.header.preamble1 = PREAMBLE1;
-    tx_buffer.header.preamble2 = PREAMBLE2;
-    tx_buffer.header.msg_class = CLASS_CFG;
-    tx_buffer.header.msg_id = msg_id;
-    tx_buffer.header.length = 0;
-    ubloxSendMessage((const uint8_t *) &tx_buffer, 6, false);
+    ubxMessage_t msg;
+    msg.header.preamble1 = PREAMBLE1;
+    msg.header.preamble2 = PREAMBLE2;
+    msg.header.msg_class = CLASS_CFG;
+    msg.header.msg_id = msg_id;
+    msg.header.length = 0;
+    ubloxSendMessage(&msg, false);
 }
 
 static void ubloxSendNAV5Message(uint8_t model) {
@@ -939,7 +946,6 @@ static void ubloxSetSbas(void)
 void setSatInfoMessageRate(uint8_t divisor)
 {
     // enable satInfoMessage at 1:5 of the nav rate if configurator is connected
-    divisor = (isConfiguratorConnected()) ? 5 : 0;
     if (gpsData.ubloxM9orAbove) {
          ubloxSetMessageRateValSet(CFG_MSGOUT_UBX_NAV_SAT_UART1, divisor);
     } else if (gpsData.ubloxM8orAbove) {
@@ -1106,16 +1112,11 @@ void gpsConfigureUblox(void)
                 break;
             }
 
-            // allow 3s for the Configurator connection to stabilise, to get the correct answer when we test the state of the connection.
-            // 3s is an arbitrary time at present, maybe should be defined or user adjustable.
-            // This delays the appearance of GPS data in OSD when not connected to configurator by 3s.
-            // Note that state_ts is set to millis() on the previous gpsSetState() command
-            if (!isConfiguratorConnected()) {
-               if (cmp32(gpsData.now, gpsData.state_ts) < 3000) {
-                   return;
-               }
+            // Add delay to stabilize the connection
+            if (cmp32(gpsData.now, gpsData.state_ts) < 1000) {
+                return;
             }
-
+    
             if (gpsData.ackState == UBLOX_ACK_IDLE) {
 
                 // short delay before between commands, including the first command
@@ -1329,6 +1330,16 @@ static void updateGpsIndicator(timeUs_t currentTimeUs)
     }
 }
 
+static void calculateNavInterval (void)
+{
+    // calculate the interval between nav packets, handling iTow wraparound at the end of the week
+    const uint32_t weekDurationMs = 7 * 24 * 3600 * 1000;
+    const uint32_t navDeltaTimeMs = (weekDurationMs + gpsSol.time - gpsData.lastNavSolTs) % weekDurationMs;
+    gpsData.lastNavSolTs = gpsSol.time;
+    // constrain the interval between 50ms / 20hz or 2.5s, when we would get a connection failure anyway
+    gpsSol.navIntervalMs = constrain(navDeltaTimeMs, 50, 2500);
+}
+
 void gpsUpdate(timeUs_t currentTimeUs)
 {
     static timeDelta_t gpsStateDurationFractionUs[GPS_STATE_COUNT];
@@ -1372,7 +1383,7 @@ void gpsUpdate(timeUs_t currentTimeUs)
             sensorsSet(SENSOR_GPS);
 
             GPS_update ^= GPS_DIRECT_TICK;
-
+            calculateNavInterval();
             onGpsNewData();
 
             GPS_update &= ~GPS_MSP_UPDATE;
@@ -2101,16 +2112,6 @@ typedef enum {
 static ubxFrameParseState_e ubxFrameParseState = UBX_PARSE_PREAMBLE_SYNC_1;
 static uint16_t ubxFrameParsePayloadCounter;
 
-static void calculateNavInterval (void)
-{
-    // calculate the interval between nav packets, handling iTow wraparound at the end of the week
-    const uint32_t weekDurationMs = 7 * 24 * 3600 * 1000;
-    const uint32_t navDeltaTimeMs = (weekDurationMs + gpsSol.time - gpsData.lastNavSolTs) % weekDurationMs;
-    gpsData.lastNavSolTs = gpsSol.time;
-    // constrain the interval between 50ms / 20hz or 2.5s, when we would get a connection failure anyway
-    gpsSol.navIntervalMs = constrain(navDeltaTimeMs, 50, 2500);
-}
-
 // SCEDEBUG To help debug which message is slow to process
 // static uint8_t lastUbxRcvMsgClass;
 // static uint8_t lastUbxRcvMsgID;
@@ -2295,38 +2296,27 @@ static bool UBLOX_parse_gps(void)
         break;
     case CLSMSG(CLASS_CFG, MSG_CFG_GNSS):
         {
-            bool isSBASenabled = false;
-            bool isM8NwithDefaultConfig = false;
-
-            if ((ubxRcvMsgPayload.ubxCfgGnss.numConfigBlocks >= 2) &&
-                (ubxRcvMsgPayload.ubxCfgGnss.configblocks[1].gnssId == 1) && //SBAS
-                (ubxRcvMsgPayload.ubxCfgGnss.configblocks[1].flags & UBLOX_GNSS_ENABLE)) { //enabled
-
-                isSBASenabled = true;
-            }
-
-            if ((ubxRcvMsgPayload.ubxCfgGnss.numTrkChHw == 32) &&  //M8N
-                (ubxRcvMsgPayload.ubxCfgGnss.numTrkChUse == 32) &&
-                (ubxRcvMsgPayload.ubxCfgGnss.numConfigBlocks == 7) &&
-                (ubxRcvMsgPayload.ubxCfgGnss.configblocks[2].gnssId == 2) && //Galileo
-                (ubxRcvMsgPayload.ubxCfgGnss.configblocks[2].resTrkCh == 4) && //min channels
-                (ubxRcvMsgPayload.ubxCfgGnss.configblocks[2].maxTrkCh == 8) && //max channels
-                !(ubxRcvMsgPayload.ubxCfgGnss.configblocks[2].flags & UBLOX_GNSS_ENABLE)) { //disabled
-
-                isM8NwithDefaultConfig = true;
-            }
-
             const uint16_t messageSize = 4 + (ubxRcvMsgPayload.ubxCfgGnss.numConfigBlocks * sizeof(ubxConfigblock_t));
-
             ubxMessage_t tx_buffer;
-            memcpy(&tx_buffer.payload, &ubxRcvMsgPayload, messageSize);
 
-            if (isSBASenabled && (gpsConfig()->sbasMode == SBAS_NONE)) {
-                tx_buffer.payload.cfg_gnss.configblocks[1].flags &= ~UBLOX_GNSS_ENABLE; //Disable SBAS
-            }
+            // prevent buffer overflow on invalid numConfigBlocks
+            const int size = MIN(messageSize, sizeof(tx_buffer.payload));
+            memcpy(&tx_buffer.payload, &ubxRcvMsgPayload, size);
 
-            if (isM8NwithDefaultConfig && gpsConfig()->gps_ublox_use_galileo) {
-                tx_buffer.payload.cfg_gnss.configblocks[2].flags |= UBLOX_GNSS_ENABLE; //Enable Galileo
+            for (int i = 0; i < ubxRcvMsgPayload.ubxCfgGnss.numConfigBlocks; i++) {
+                if (ubxRcvMsgPayload.ubxCfgGnss.configblocks[i].gnssId == UBLOX_GNSS_SBAS) {
+                    if (gpsConfig()->sbasMode == SBAS_NONE) {
+                        tx_buffer.payload.cfg_gnss.configblocks[i].flags &= ~UBLOX_GNSS_ENABLE; // Disable SBAS
+                    }
+                }
+
+                if (ubxRcvMsgPayload.ubxCfgGnss.configblocks[i].gnssId == UBLOX_GNSS_GALILEO) {
+                    if (gpsConfig()->gps_ublox_use_galileo) {
+                        tx_buffer.payload.cfg_gnss.configblocks[i].flags |= UBLOX_GNSS_ENABLE; // Enable Galileo
+                    } else {
+                        tx_buffer.payload.cfg_gnss.configblocks[i].flags &= ~UBLOX_GNSS_ENABLE; // Disable Galileo
+                    }
+                }
             }
 
             ubloxSendConfigMessage(&tx_buffer, MSG_CFG_GNSS, messageSize, false);
@@ -2568,6 +2558,13 @@ void GPS_reset_home_position(void)
             // PS: to test for gyro cal, check for !ARMED, since we cannot be here while disarmed other than via gyro cal
         }
     }
+
+#ifdef USE_GPS_UBLOX
+    // disable Sat Info requests on arming
+    if (gpsConfig()->provider == GPS_UBLOX) {
+        setSatInfoMessageRate(0);
+    }
+#endif
     GPS_calculateDistanceFlown(true); // Initialize
 }
 
@@ -2576,7 +2573,7 @@ void GPS_reset_home_position(void)
 #define TAN_89_99_DEGREES 5729.57795f
 // Get distance between two points in cm
 // Get bearing from pos1 to pos2, returns an 1deg = 100 precision
-void GPS_distance_cm_bearing(int32_t *currentLat1, int32_t *currentLon1, int32_t *destinationLat2, int32_t *destinationLon2, uint32_t *dist, int32_t *bearing)
+void GPS_distance_cm_bearing(const int32_t *currentLat1, const int32_t *currentLon1, const int32_t *destinationLat2, const int32_t *destinationLon2, uint32_t *dist, int32_t *bearing)
 {
     float dLat = *destinationLat2 - *currentLat1; // difference of latitude in 1/10 000 000 degrees
     float dLon = (float)(*destinationLon2 - *currentLon1) * GPS_scaleLonDown;

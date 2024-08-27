@@ -257,6 +257,14 @@ void pidInitFilters(const pidProfile_t *pidProfile)
 #endif
 
     pt2FilterInit(&pidRuntime.antiGravityLpf, pt2FilterGain(pidProfile->anti_gravity_cutoff_hz, pidRuntime.dT));
+#ifdef USE_WING
+    pt2FilterInit(&pidRuntime.tpaLpf, pt2FilterGainFromDelay(pidProfile->tpa_delay_ms / 1000.0f, pidRuntime.dT));
+    pidRuntime.tpaGravityThr0 = pidProfile->tpa_gravity_thr0 / 100.0f;
+    pidRuntime.tpaGravityThr100 = pidProfile->tpa_gravity_thr100 / 100.0f;
+    for (int axis = 0; axis < XYZ_AXIS_COUNT; axis++) {
+        pidRuntime.spa[axis] = 1.0f; // 1.0 = no PID attenuation in runtime. 0 - full attenuation (no PIDs)
+    }
+#endif
 }
 
 void pidInit(const pidProfile_t *pidProfile)
@@ -308,8 +316,8 @@ void pidInitConfig(const pidProfile_t *pidProfile)
     pidRuntime.crashTimeDelayUs = pidProfile->crash_delay * 1000;
     pidRuntime.crashRecoveryAngleDeciDegrees = pidProfile->crash_recovery_angle * 10;
     pidRuntime.crashRecoveryRate = pidProfile->crash_recovery_rate;
-    pidRuntime.crashGyroThreshold = pidProfile->crash_gthreshold;
-    pidRuntime.crashDtermThreshold = pidProfile->crash_dthreshold;
+    pidRuntime.crashGyroThreshold = pidProfile->crash_gthreshold; // error in deg/s
+    pidRuntime.crashDtermThreshold = pidProfile->crash_dthreshold * 1000.0f; // gyro delta in deg/s/s * 1000 to match original 2017 intent
     pidRuntime.crashSetpointThreshold = pidProfile->crash_setpoint_threshold;
     pidRuntime.crashLimitYaw = pidProfile->crash_limit_yaw;
     pidRuntime.itermLimit = pidProfile->itermLimit;
@@ -418,10 +426,16 @@ void pidInitConfig(const pidProfile_t *pidProfile)
     pidRuntime.feedforwardAveraging = pidProfile->feedforward_averaging;
     pidRuntime.feedforwardSmoothFactor = 1.0f - (0.01f * pidProfile->feedforward_smooth_factor);
     pidRuntime.feedforwardJitterFactor = pidProfile->feedforward_jitter_factor;
-    pidRuntime.feedforwardJitterFactorInv = 1.0f / (2.0f * pidProfile->feedforward_jitter_factor);
-    // the extra division by 2 is to average the sum of the two previous rcCommandAbs values
-    pidRuntime.feedforwardBoostFactor = 0.1f * pidProfile->feedforward_boost;
+    pidRuntime.feedforwardJitterFactorInv = 1.0f / (1.0f + pidProfile->feedforward_jitter_factor);
+    pidRuntime.feedforwardBoostFactor = 0.001f * pidProfile->feedforward_boost;
     pidRuntime.feedforwardMaxRateLimit = pidProfile->feedforward_max_rate_limit;
+    pidRuntime.feedforwardInterpolate = !(rxRuntimeState.serialrxProvider == SERIALRX_CRSF);
+    pidRuntime.feedforwardYawHoldTime = 0.001f * pidProfile->feedforward_yaw_hold_time; // input time constant in milliseconds, converted to seconds
+    pidRuntime.feedforwardYawHoldGain = pidProfile->feedforward_yaw_hold_gain;
+    // normalise/maintain boost when time constant is small, 1.5x at 50ms, 2x at 25ms, almost 3x at 10ms
+    if (pidProfile->feedforward_yaw_hold_time < 100) {
+        pidRuntime.feedforwardYawHoldGain *= 150.0f / (float)(pidProfile->feedforward_yaw_hold_time + 50);
+    }
 #endif
 
     pidRuntime.levelRaceMode = pidProfile->level_race_mode;
@@ -433,6 +447,10 @@ void pidInitConfig(const pidProfile_t *pidProfile)
     pidRuntime.tpaLowBreakpoint = MIN(pidRuntime.tpaLowBreakpoint, pidRuntime.tpaBreakpoint);
     pidRuntime.tpaLowMultiplier = pidProfile->tpa_low_rate / (100.0f * pidRuntime.tpaLowBreakpoint);
     pidRuntime.tpaLowAlways = pidProfile->tpa_low_always;
+
+    pidRuntime.useEzDisarm = pidProfile->landing_disarm_threshold > 0;
+    pidRuntime.landingDisarmThreshold = pidProfile->landing_disarm_threshold * 10.0f;
+
 }
 
 void pidCopyProfile(uint8_t dstPidProfileIndex, uint8_t srcPidProfileIndex)

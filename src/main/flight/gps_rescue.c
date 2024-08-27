@@ -101,7 +101,6 @@ typedef struct {
     float distanceToHomeM;
     uint16_t groundSpeedCmS;
     int16_t directionToHome;
-    float accMagnitude;
     bool healthy;
     float errorAngle;
     float gpsDataIntervalSeconds;
@@ -194,17 +193,19 @@ static void setReturnAltitude(void)
         // Intended descent distance for rescues that start outside the minStartDistM distance
         // Set this to the user's intended descent distance, but not more than half the distance to home to ensure some fly home time
         rescueState.intent.descentDistanceM = fminf(0.5f * rescueState.sensor.distanceToHomeM, gpsRescueConfig()->descentDistanceM);
- 
+
+        const float initialClimbCm = gpsRescueConfig()->initialClimbM * 100.0f;
         switch (gpsRescueConfig()->altitudeMode) {
             case GPS_RESCUE_ALT_MODE_FIXED:
                 rescueState.intent.returnAltitudeCm = gpsRescueConfig()->returnAltitudeM * 100.0f;
                 break;
             case GPS_RESCUE_ALT_MODE_CURRENT:
-                rescueState.intent.returnAltitudeCm = rescueState.sensor.currentAltitudeCm + gpsRescueConfig()->initialClimbM * 100.0f;
+                // climb above current altitude, but always return at least initial height above takeoff point, in case current altitude was negative
+                rescueState.intent.returnAltitudeCm = fmaxf(initialClimbCm, rescueState.sensor.currentAltitudeCm + initialClimbCm);
                 break;
             case GPS_RESCUE_ALT_MODE_MAX:
             default:
-                rescueState.intent.returnAltitudeCm = rescueState.intent.maxAltitudeCm + gpsRescueConfig()->initialClimbM * 100.0f;
+                rescueState.intent.returnAltitudeCm = rescueState.intent.maxAltitudeCm + initialClimbCm;
                 break;
         }
     }
@@ -562,12 +563,6 @@ static void sensorUpdate(void)
     DEBUG_SET(DEBUG_GPS_RESCUE_HEADING, 3, rescueState.sensor.directionToHome); // computed from current GPS position in relation to home
     rescueState.sensor.healthy = gpsIsHealthy();
 
-    if (rescueState.phase == RESCUE_LANDING) {
-        // do this at sensor update rate, not the much slower GPS rate, for quick disarm
-        rescueState.sensor.accMagnitude = (float) sqrtf(sq(acc.accADC[Z] - acc.dev.acc_1G) + sq(acc.accADC[X]) + sq(acc.accADC[Y])) * acc.dev.acc_1G_rec;
-        // Note: subtracting 1G from Z assumes the quad is 'flat' with respect to the horizon.  A true non-gravity acceleration value, regardless of attitude, may be better.
-    }
-
     rescueState.sensor.directionToHome = GPS_directionToHome; // extern value from gps.c using current position relative to home
     rescueState.sensor.errorAngle = (attitude.values.yaw - rescueState.sensor.directionToHome) / 10.0f;
     // both attitude and direction are in degrees * 10, errorAngle is degrees
@@ -700,7 +695,7 @@ static bool checkGPSRescueIsAvailable(void)
 
 void disarmOnImpact(void)
 {
-    if (rescueState.sensor.accMagnitude > rescueState.intent.disarmThreshold) {
+    if (acc.accMagnitude > rescueState.intent.disarmThreshold) {
         setArmingDisabled(ARMING_DISABLED_ARM_SWITCH);
         disarm(DISARM_REASON_GPS_RESCUE);
         rescueStop();

@@ -323,11 +323,13 @@ void updateArmingStatus(void)
             unsetArmingDisabled(ARMING_DISABLED_ANGLE);
         }
 
-        if (getAverageSystemLoadPercent() > LOAD_PERCENTAGE_ONE) {
+#if defined(USE_LATE_TASK_STATISTICS)
+        if ((getCpuPercentageLate() > schedulerConfig()->cpuLatePercentageLimit)) {
             setArmingDisabled(ARMING_DISABLED_LOAD);
         } else {
             unsetArmingDisabled(ARMING_DISABLED_LOAD);
         }
+#endif // USE_LATE_TASK_STATISTICS
 
         if (isCalibrating()) {
             setArmingDisabled(ARMING_DISABLED_CALIBRATING);
@@ -361,7 +363,7 @@ void updateArmingStatus(void)
 
 #ifdef USE_DSHOT_TELEMETRY
         // If Dshot Telemetry is enabled and any motor isn't providing telemetry, then disable arming
-        if (motorConfig()->dev.useDshotTelemetry && !isDshotTelemetryActive()) {
+        if (useDshotTelemetry && !isDshotTelemetryActive()) {
             setArmingDisabled(ARMING_DISABLED_DSHOT_TELEM);
         } else {
             unsetArmingDisabled(ARMING_DISABLED_DSHOT_TELEM);
@@ -512,7 +514,7 @@ void tryArm(void)
         if (isMotorProtocolDshot()) {
 #if defined(USE_ESC_SENSOR) && defined(USE_DSHOT_TELEMETRY)
             // Try to activate extended DSHOT telemetry only if no esc sensor exists and dshot telemetry is active
-            if (!featureIsEnabled(FEATURE_ESC_SENSOR) && motorConfig()->dev.useDshotTelemetry) {
+            if (!featureIsEnabled(FEATURE_ESC_SENSOR) && useDshotTelemetry) {
                 dshotCleanTelemetryData();
                 if (motorConfig()->dev.useDshotEdt) {
                     dshotCommandWrite(ALL_MOTORS, getMotorCount(), DSHOT_CMD_EXTENDED_TELEMETRY_ENABLE, DSHOT_CMD_TYPE_INLINE);
@@ -580,9 +582,10 @@ void tryArm(void)
         lastArmingDisabledReason = 0;
 
 #ifdef USE_GPS
-        GPS_reset_home_position();
         //beep to indicate arming
         if (featureIsEnabled(FEATURE_GPS)) {
+            GPS_reset_home_position();
+
             if (STATE(GPS_FIX) && gpsSol.numSat >= gpsRescueConfig()->minSats) {
                 beeper(BEEPER_ARMING_GPS_FIX);
             } else {

@@ -56,7 +56,7 @@
 #include "drivers/dma.h"
 #include "drivers/dshot.h"
 #include "drivers/exti.h"
-#include "drivers/flash.h"
+#include "drivers/flash/flash.h"
 #include "drivers/inverter.h"
 #include "drivers/io.h"
 #include "drivers/light_led.h"
@@ -236,7 +236,7 @@ static void configureQuadSPIBusses(void)
 #ifdef USE_QUADSPI_DEVICE_1
     quadSpiInit(QUADSPIDEV_1);
 #endif
-#endif // USE_QUAD_SPI
+#endif // USE_QUADSPI
 }
 
 static void configureOctoSPIBusses(void)
@@ -478,7 +478,7 @@ void init(void)
     }
 #endif
 
-#if defined(STM32F4) || defined(STM32G4)
+#if defined(STM32F4) || defined(STM32G4) || defined(APM32F4)
     // F4 has non-8MHz boards
     // G4 for Betaflight allow 24 or 27MHz oscillator
     systemClockSetHSEValue(systemConfig()->hseMhz * 1000000U);
@@ -493,7 +493,7 @@ void init(void)
     // Note that mcoConfigure must be augmented with an additional argument to
     // indicate which device instance to configure when MCO and MCO2 are both supported
 
-#if defined(STM32F4) || defined(STM32F7)
+#if defined(STM32F4) || defined(STM32F7) || defined(APM32F4)
     // F4 and F7 support MCO on PA8 and MCO2 on PC9, but only MCO2 is supported for now
     mcoConfigure(MCODEV_2, mcoConfig(MCODEV_2));
 #elif defined(STM32G4)
@@ -694,7 +694,7 @@ void init(void)
     // Now reset the targetLooptime as it's possible for the validation to change the pid_process_denom
     gyroSetTargetLooptime(pidConfig()->pid_process_denom);
 
-#ifdef USE_DSHOT_TELEMETRY
+#if defined(USE_DSHOT_TELEMETRY) || defined(USE_ESC_SENSOR)
     // Initialize the motor frequency filter now that we have a target looptime
     initDshotTelemetry(gyro.targetLooptime);
 #endif
@@ -891,7 +891,13 @@ void init(void)
     //The OSD need to be initialised after GYRO to avoid GYRO initialisation failure on some targets
 
     if (featureIsEnabled(FEATURE_OSD)) {
-        osdDisplayPortDevice_e device = osdConfig()->displayPortDevice;
+        osdDisplayPortDevice_e device;
+
+        if (vcdProfile()->video_system == VIDEO_SYSTEM_HD) {
+            device = OSD_DISPLAYPORT_DEVICE_MSP;
+        } else {
+            device = osdConfig()->displayPortDevice;
+        }
 
         switch(device) {
 

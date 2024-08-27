@@ -55,10 +55,12 @@
 
 #include "drivers/display.h"
 #include "drivers/dshot.h"
-#include "drivers/flash.h"
+#include "drivers/flash/flash.h"
 #include "drivers/osd_symbols.h"
 #include "drivers/sdcard.h"
 #include "drivers/time.h"
+
+#include "drivers/pinio.h"
 
 #include "fc/core.h"
 #include "fc/gps_lap_timer.h"
@@ -202,20 +204,11 @@ const osd_stats_e osdStatsDisplayOrder[OSD_STAT_COUNT] = {
     OSD_STAT_AVG_THROTTLE,
 };
 
-// Group elements in a number of groups to reduce task scheduling overhead
-#define OSD_GROUP_COUNT                 OSD_ITEM_COUNT
-// Aim to render a group of elements within a target time
-#define OSD_ELEMENT_RENDER_TARGET       30
-// Allow a margin by which a group render can exceed that of the sum of the elements before declaring insane
-// This will most likely be violated by a USB interrupt whilst using the CLI
-#if defined(STM32F411xE)
-#define OSD_ELEMENT_RENDER_GROUP_MARGIN 7
-#else
-#define OSD_ELEMENT_RENDER_GROUP_MARGIN 2
-#endif
 #define OSD_TASK_MARGIN                 1
+#define OSD_ELEMENT_MARGIN              4
+
 // Decay the estimated max task duration by 1/(1 << OSD_EXEC_TIME_SHIFT) on every invocation
-#define OSD_EXEC_TIME_SHIFT             8
+#define OSD_EXEC_TIME_SHIFT             5
 
 // Format a float to the specified number of decimal places with optional rounding.
 // OSD symbols can optionally be placed before and after the formatted number (use SYM_NONE for no symbol).
@@ -395,13 +388,11 @@ void pgResetFn_osdConfig(osdConfig_t *osdConfig)
     }
     osdConfig->rssi_dbm_alarm = -60;
     osdConfig->rsnr_alarm = 4;
-    osdConfig->gps_sats_show_hdop = false;
+    osdConfig->gps_sats_show_pdop = false;
 
     for (int i = 0; i < OSD_RCCHANNELS_COUNT; i++) {
         osdConfig->rcChannels[i] = -1;
     }
-
-    osdConfig->displayPortDevice = OSD_DISPLAYPORT_DEVICE_AUTO;
 
     osdConfig->distance_alarm = 0;
     osdConfig->logo_on_arming = OSD_LOGO_ARMING_OFF;
@@ -423,29 +414,33 @@ void pgResetFn_osdConfig(osdConfig_t *osdConfig)
 
     // Make it obvious on the configurator that the FC doesn't support HD
 #ifdef USE_OSD_HD
+    osdConfig->displayPortDevice = OSD_DISPLAYPORT_DEVICE_MSP;
     osdConfig->canvas_cols = OSD_HD_COLS;
     osdConfig->canvas_rows = OSD_HD_ROWS;
 #else
+    osdConfig->displayPortDevice = OSD_DISPLAYPORT_DEVICE_AUTO;
     osdConfig->canvas_cols = OSD_SD_COLS;
     osdConfig->canvas_rows = OSD_SD_ROWS;
 #endif
 
-#ifdef USE_QUICK_OSD_MENU
+#ifdef USE_OSD_QUICK_MENU
     osdConfig->osd_use_quick_menu = true;
-#endif // USE_QUICK_OSD_MENU
-#ifdef USE_SPEC_PREARM_SCREEN
+#endif // USE_OSD_QUICK_MENU
+
+#ifdef USE_RACE_PRO
     osdConfig->osd_show_spec_prearm = true;
-#endif // USE_SPEC_PREARM_SCREEN
+#endif // USE_RACE_PRO
 }
 
 void pgResetFn_osdElementConfig(osdElementConfig_t *osdElementConfig)
 {
-#ifdef USE_OSD_SD
-    uint8_t midRow = 7;
-    uint8_t midCol = 15;
-#else
+// If user includes OSD_HD in the build assume they want to use it as default
+#ifdef USE_OSD_HD
     uint8_t midRow = 10;
     uint8_t midCol = 26;
+#else
+    uint8_t midRow = 7;
+    uint8_t midCol = 15;
 #endif
 
     // Position elements near centre of screen and disabled by default
@@ -468,14 +463,14 @@ void pgResetFn_osdElementConfig(osdElementConfig_t *osdElementConfig)
     osdElementConfig->item_pos[OSD_UP_DOWN_REFERENCE]  = OSD_POS((midCol - 2), (midRow - 1));
 }
 
-static void osdDrawLogo(int x, int y)
+static void osdDrawLogo(int x, int y, displayPortSeverity_e fontSel)
 {
     // display logo and help
     int fontOffset = 160;
     for (int row = 0; row < OSD_LOGO_ROWS; row++) {
         for (int column = 0; column < OSD_LOGO_COLS; column++) {
             if (fontOffset <= SYM_END_OF_FONT)
-                displayWriteChar(osdDisplayPort, x + column, y + row, DISPLAYPORT_SEVERITY_NORMAL, fontOffset++);
+                displayWriteChar(osdDisplayPort, x + column, y + row, fontSel, fontOffset++);
         }
     }
 }
@@ -495,7 +490,8 @@ static void osdCompleteInitialization(void)
     displayBeginTransaction(osdDisplayPort, DISPLAY_TRANSACTION_OPT_RESET_DRAWING);
     displayClearScreen(osdDisplayPort, DISPLAY_CLEAR_WAIT);
 
-    osdDrawLogo(midCol - (OSD_LOGO_COLS) / 2, midRow - 5);
+    // Display betaflight logo
+    osdDrawLogo(midCol - (OSD_LOGO_COLS) / 2, midRow - 5, DISPLAYPORT_SEVERITY_NORMAL);
 
     char string_buffer[30];
     tfp_sprintf(string_buffer, "V%s", FC_VERSION_STRING);
@@ -612,7 +608,7 @@ static int32_t getAverageEscRpm(void)
     }
 #endif
 #ifdef USE_DSHOT_TELEMETRY
-    if (motorConfig()->dev.useDshotTelemetry) {
+    if (useDshotTelemetry) {
         return lrintf(getDshotRpmAverage());
     }
 #endif
@@ -1198,7 +1194,7 @@ static timeDelta_t osdShowArmed(void)
     if ((osdConfig()->logo_on_arming == OSD_LOGO_ARMING_ON) || ((osdConfig()->logo_on_arming == OSD_LOGO_ARMING_FIRST) && !ARMING_FLAG(WAS_EVER_ARMED))) {
         uint8_t midRow = osdDisplayPort->rows / 2;
         uint8_t midCol = osdDisplayPort->cols / 2;
-        osdDrawLogo(midCol - (OSD_LOGO_COLS) / 2, midRow - 5);
+        osdDrawLogo(midCol - (OSD_LOGO_COLS) / 2, midRow - 5, osdConfig()->arming_logo);
         ret = osdConfig()->logo_on_arming_duration * 1e5;
     } else {
         ret = (REFRESH_1S / 2);
@@ -1338,9 +1334,11 @@ typedef enum {
     OSD_STATE_PROCESS_STATS2,
     OSD_STATE_PROCESS_STATS3,
     OSD_STATE_UPDATE_ALARMS,
+    OSD_STATE_REFRESH_PREARM,
     OSD_STATE_UPDATE_CANVAS,
-    OSD_STATE_GROUP_ELEMENTS,
-    OSD_STATE_UPDATE_ELEMENTS,
+    // Elements are handled in two steps, drawing into a buffer, and then sending to the display
+    OSD_STATE_DRAW_ELEMENT,
+    OSD_STATE_DISPLAY_ELEMENT,
     OSD_STATE_UPDATE_HEARTBEAT,
     OSD_STATE_COMMIT,
     OSD_STATE_TRANSFER,
@@ -1364,7 +1362,10 @@ bool osdUpdateCheck(timeUs_t currentTimeUs, timeDelta_t currentDeltaTimeUs)
 
             // Determine time of next update
             if (osdUpdateDueUs) {
-                osdUpdateDueUs += OSD_UPDATE_INTERVAL_US;
+                // Ensure there's not a flurry of updates to catch up
+                while (cmpTimeUs(osdUpdateDueUs, currentTimeUs) < 0) {
+                    osdUpdateDueUs += OSD_UPDATE_INTERVAL_US;
+                }
             } else {
                 osdUpdateDueUs = currentTimeUs + OSD_UPDATE_INTERVAL_US;
             }
@@ -1378,13 +1379,9 @@ bool osdUpdateCheck(timeUs_t currentTimeUs, timeDelta_t currentDeltaTimeUs)
 void osdUpdate(timeUs_t currentTimeUs)
 {
     static uint16_t osdStateDurationFractionUs[OSD_STATE_COUNT] = { 0 };
-    static uint32_t osdElementDurationUs[OSD_ITEM_COUNT] = { 0 };
-    static uint8_t osdElementGroupMemberships[OSD_ITEM_COUNT];
-    static uint16_t osdElementGroupTargetFractionUs[OSD_GROUP_COUNT] = { 0 };
-    static uint16_t osdElementGroupDurationFractionUs[OSD_GROUP_COUNT] = { 0 };
-    static uint8_t osdElementGroup;
-    static bool firstPass = true;
-    uint8_t osdCurrentElementGroup = 0;
+    static uint32_t osdElementDurationFractionUs[OSD_ITEM_COUNT] = { 0 };
+    static bool moreElementsToDraw;
+
     timeUs_t executeTimeUs;
     osdState_e osdCurrentState = osdState;
 
@@ -1505,96 +1502,84 @@ void osdUpdate(timeUs_t currentTimeUs)
         }
 #endif // USE_GPS
 
-        osdSyncBlink();
+        osdSyncBlink(currentTimeUs);
 
-        osdState = OSD_STATE_GROUP_ELEMENTS;
+        osdState = OSD_STATE_DRAW_ELEMENT;
 
         break;
 
-    case OSD_STATE_GROUP_ELEMENTS:
+    case OSD_STATE_DRAW_ELEMENT:
         {
-            uint8_t elementGroup;
-            uint8_t activeElements = osdGetActiveElementCount();
+            uint8_t osdElement = osdGetActiveElement();
 
-            // Reset groupings
-            for (elementGroup = 0; elementGroup < OSD_GROUP_COUNT; elementGroup++) {
-                if (osdElementGroupDurationFractionUs[elementGroup] > (OSD_ELEMENT_RENDER_TARGET << OSD_EXEC_TIME_SHIFT)) {
-                    osdElementGroupDurationFractionUs[elementGroup] = 0;
-                }
-                osdElementGroupTargetFractionUs[elementGroup] = 0;
+            timeUs_t startElementTime = micros();
+
+            moreElementsToDraw = osdDrawNextActiveElement(osdDisplayPort);
+
+            executeTimeUs = micros() - startElementTime;
+
+            if (executeTimeUs > (osdElementDurationFractionUs[osdElement] >> OSD_EXEC_TIME_SHIFT)) {
+                osdElementDurationFractionUs[osdElement] = executeTimeUs << OSD_EXEC_TIME_SHIFT;
+            } else if (osdElementDurationFractionUs[osdElement] > 0) {
+                // Slowly decay the max time
+                osdElementDurationFractionUs[osdElement]--;
             }
 
-            elementGroup = 0;
+            if (osdIsRenderPending()) {
+                osdState = OSD_STATE_DISPLAY_ELEMENT;
 
-            // Based on the current element rendering, group to execute in approx 40us
-            for (uint8_t curElement = 0; curElement < activeElements; curElement++) {
-                if ((osdElementGroupTargetFractionUs[elementGroup] == 0) ||
-                    (osdElementGroupTargetFractionUs[elementGroup] + (osdElementDurationUs[curElement]) <= (OSD_ELEMENT_RENDER_TARGET << OSD_EXEC_TIME_SHIFT)) ||
-                    (elementGroup == (OSD_GROUP_COUNT - 1))) {
-                    osdElementGroupTargetFractionUs[elementGroup] += osdElementDurationUs[curElement];
-                    // If group membership changes, reset the stats for the group
-                    if (osdElementGroupMemberships[curElement] != elementGroup) {
-                        osdElementGroupDurationFractionUs[elementGroup] = osdElementGroupTargetFractionUs[elementGroup] + (OSD_ELEMENT_RENDER_GROUP_MARGIN << OSD_EXEC_TIME_SHIFT);
-                    }
-                    osdElementGroupMemberships[curElement] = elementGroup;
-                } else {
-                    elementGroup++;
-                    // Try again for this element
-                    curElement--;
-                }
+                // Render the element just drawn
+                break;
             }
 
-            // Start with group 0
-            osdElementGroup = 0;
+            if (moreElementsToDraw) {
+                // There are more elements to draw
+                break;
+            }
 
-            if (activeElements > 0) {
-                osdState = OSD_STATE_UPDATE_ELEMENTS;
-            } else {
+#ifdef USE_SPEC_PREARM_SCREEN
+            if (!ARMING_FLAG(ARMED) && osdConfig()->osd_show_spec_prearm) {
+                osdState = OSD_STATE_REFRESH_PREARM;
+            } else
+#endif // USE_SPEC_PREARM_SCREEN
+            {
                 osdState = OSD_STATE_COMMIT;
             }
         }
         break;
 
-    case OSD_STATE_UPDATE_ELEMENTS:
+    case OSD_STATE_DISPLAY_ELEMENT:
         {
-            osdCurrentElementGroup = osdElementGroup;
-            bool moreElements = true;
+            const bool pendingDisplay = osdDisplayActiveElement();
 
-            do {
-                timeUs_t startElementTime = micros();
-                uint8_t osdCurrentElement = osdGetActiveElement();
-
-                // This element should be rendered in the next group
-                if (osdElementGroupMemberships[osdCurrentElement] != osdElementGroup) {
-                    osdElementGroup++;
-                    break;
-                }
-
-                moreElements = osdDrawNextActiveElement(osdDisplayPort, currentTimeUs);
-
-                executeTimeUs = micros() - startElementTime;
-
-                if (executeTimeUs > (osdElementDurationUs[osdCurrentElement] >> OSD_EXEC_TIME_SHIFT)) {
-                    osdElementDurationUs[osdCurrentElement] = executeTimeUs << OSD_EXEC_TIME_SHIFT;
-                } else if (osdElementDurationUs[osdCurrentElement] > 0) {
-                    // Slowly decay the max time
-                    osdElementDurationUs[osdCurrentElement]--;
-                }
-            } while (moreElements);
-
-            if (moreElements) {
-                // There are more elements to draw
-                break;
-            }
+            if (!pendingDisplay) {
+                if (moreElementsToDraw) {
+                    // There is no more to draw so advance to the next element
+                    osdState = OSD_STATE_DRAW_ELEMENT;
+                } else {
+                    // Displaying the current element is complete and there are no futher elements to draw so advance
 #ifdef USE_SPEC_PREARM_SCREEN
-            osdDrawSpec(osdDisplayPort);
+                    if (!ARMING_FLAG(ARMED) && osdConfig()->osd_show_spec_prearm) {
+                        osdState = OSD_STATE_REFRESH_PREARM;
+                    } else
 #endif // USE_SPEC_PREARM_SCREEN
-
-            osdElementGroup = 0;
-
-            osdState = OSD_STATE_COMMIT;
+                    {
+                        osdState = OSD_STATE_COMMIT;
+                    }
+                }
+            }
         }
         break;
+
+#ifdef USE_SPEC_PREARM_SCREEN
+    case OSD_STATE_REFRESH_PREARM:
+        if (osdDrawSpec(osdDisplayPort)) {
+            // Rendering is complete
+            osdState = OSD_STATE_COMMIT;
+        }
+
+        break;
+#endif // USE_SPEC_PREARM_SCREEN
 
     case OSD_STATE_COMMIT:
         displayCommitTransaction(osdDisplayPort);
@@ -1617,7 +1602,6 @@ void osdUpdate(timeUs_t currentTimeUs)
             break;
         }
 
-        firstPass = false;
         osdState = OSD_STATE_IDLE;
 
         break;
@@ -1631,36 +1615,20 @@ void osdUpdate(timeUs_t currentTimeUs)
     if (!schedulerGetIgnoreTaskExecTime()) {
         executeTimeUs = micros() - currentTimeUs;
 
-
-        // On the first pass no element groups will have been formed, so all elements will have been
-        // rendered which is unrepresentative, so ignore
-        if (!firstPass) {
-            if (osdCurrentState == OSD_STATE_UPDATE_ELEMENTS) {
-                if (executeTimeUs > (osdElementGroupDurationFractionUs[osdCurrentElementGroup] >> OSD_EXEC_TIME_SHIFT)) {
-                    osdElementGroupDurationFractionUs[osdCurrentElementGroup] = executeTimeUs << OSD_EXEC_TIME_SHIFT;
-                } else if (osdElementGroupDurationFractionUs[osdCurrentElementGroup] > 0) {
-                    // Slowly decay the max time
-                    osdElementGroupDurationFractionUs[osdCurrentElementGroup]--;
-                }
-            }
-
-            if (executeTimeUs > (osdStateDurationFractionUs[osdCurrentState] >> OSD_EXEC_TIME_SHIFT)) {
-                osdStateDurationFractionUs[osdCurrentState] = executeTimeUs << OSD_EXEC_TIME_SHIFT;
-            } else if (osdStateDurationFractionUs[osdCurrentState] > 0) {
-                // Slowly decay the max time
-                osdStateDurationFractionUs[osdCurrentState]--;
-            }
+        if (executeTimeUs > (osdStateDurationFractionUs[osdCurrentState] >> OSD_EXEC_TIME_SHIFT)) {
+            osdStateDurationFractionUs[osdCurrentState] = executeTimeUs << OSD_EXEC_TIME_SHIFT;
+        } else if (osdStateDurationFractionUs[osdCurrentState] > 0) {
+            // Slowly decay the max time
+            osdStateDurationFractionUs[osdCurrentState]--;
         }
     }
 
-    if (osdState == OSD_STATE_UPDATE_ELEMENTS) {
-        schedulerSetNextStateTime((osdElementGroupDurationFractionUs[osdElementGroup] >> OSD_EXEC_TIME_SHIFT) + OSD_ELEMENT_RENDER_GROUP_MARGIN);
+    if (osdState == OSD_STATE_IDLE) {
+        schedulerSetNextStateTime((osdStateDurationFractionUs[OSD_STATE_CHECK] >> OSD_EXEC_TIME_SHIFT));
+    } else if (osdState == OSD_STATE_DRAW_ELEMENT) {
+        schedulerSetNextStateTime((osdElementDurationFractionUs[osdGetActiveElement()] >> OSD_EXEC_TIME_SHIFT) + OSD_ELEMENT_MARGIN);
     } else {
-        if (osdState == OSD_STATE_IDLE) {
-            schedulerSetNextStateTime((osdStateDurationFractionUs[OSD_STATE_CHECK] >> OSD_EXEC_TIME_SHIFT) + OSD_TASK_MARGIN);
-        } else {
-            schedulerSetNextStateTime((osdStateDurationFractionUs[osdState] >> OSD_EXEC_TIME_SHIFT) + OSD_TASK_MARGIN);
-        }
+        schedulerSetNextStateTime((osdStateDurationFractionUs[osdState] >> OSD_EXEC_TIME_SHIFT) + OSD_TASK_MARGIN);
     }
 }
 

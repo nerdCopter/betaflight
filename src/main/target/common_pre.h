@@ -138,10 +138,12 @@
 #define USE_FLASH_TOOLS
 #define USE_FLASH_M25P16
 #define USE_FLASH_W25N01G    // 1Gb NAND flash support
+#define USE_FLASH_W25N02K    // 2Gb NAND flash support
 #define USE_FLASH_W25M       // Stacked die support
 #define USE_FLASH_W25M512    // 512Kb (256Kb x 2 stacked) NOR flash support
 #define USE_FLASH_W25M02G    // 2Gb (1Gb x 2 stacked) NAND flash support
 #define USE_FLASH_W25Q128FV  // 16MB Winbond 25Q128
+#define USE_FLASH_PY25Q128HA // 16MB PUYA SEMI 25Q128
 #endif // USE_EXST
 
 #endif // USE_FLASH
@@ -155,7 +157,6 @@
 #define USE_RX_SPI
 
 #define USE_RX_CC2500
-#define USE_RX_CRSF
 #define USE_RX_EXPRESSLRS
 #define USE_RX_SX1280
 #define USE_RX_SX127X
@@ -201,11 +202,13 @@
 
 #define USE_VTX
 #define USE_OSD
+#if !defined(USE_OSD_SD) && !defined(USE_OSD_HD)
 #define USE_OSD_SD
 #define USE_OSD_HD
+#endif
 #define USE_BLACKBOX
 
-#if TARGET_FLASH_SIZE > 512
+#if TARGET_FLASH_SIZE >= 1024
 
 #if defined(USE_SERIALRX)
 
@@ -232,7 +235,7 @@
 
 #ifdef USE_OSD
 // Dependency for CMS is defined outside this block.
-#define USE_QUICK_OSD_MENU
+#define USE_OSD_QUICK_MENU
 #define USE_RC_STATS
 #define USE_SPEC_PREARM_SCREEN
 #endif
@@ -282,11 +285,6 @@
 #define USE_LED_STRIP_STATUS_MODE
 #endif
 
-#if defined(USE_PINIO)
-#define USE_PINIOBOX
-#define USE_PIN_PULL_UP_DOWN
-#endif
-
 #if defined(USE_VTX)
 #define USE_VTX_COMMON
 #define USE_VTX_CONTROL
@@ -332,7 +330,7 @@
 #define USE_THRUST_LINEARIZATION
 #define USE_TPA_MODE
 
-#ifdef USE_SERIALRX_SPEKTRUM
+#if defined(USE_SERIALRX_SPEKTRUM) || defined(USE_SERIALRX_SRXL2)
 #define USE_SPEKTRUM_BIND
 #define USE_SPEKTRUM_BIND_PLUG
 #define USE_SPEKTRUM_REAL_RSSI
@@ -341,7 +339,7 @@
 #define USE_SPEKTRUM_VTX_CONTROL
 #define USE_SPEKTRUM_VTX_TELEMETRY
 #define USE_SPEKTRUM_CMS_TELEMETRY
-#endif // USE_SERIALRX_SPEKTRUM
+#endif // defined(USE_SERIALRX_SPEKTRUM) || defined USE_SERIALRX_SRXL2
 
 #define USE_BOARD_INFO
 #define USE_RTC_TIME
@@ -446,8 +444,8 @@
 #endif
 
 #ifdef USE_OSD
-#ifndef USE_QUICK_OSD_MENU
-#define USE_QUICK_OSD_MENU
+#ifndef USE_OSD_QUICK_MENU
+#define USE_OSD_QUICK_MENU
 #endif
 #ifndef USE_RC_STATS
 #define USE_RC_STATS
