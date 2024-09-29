@@ -75,7 +75,7 @@ extern "C" {
     PG_REGISTER(rcControlsConfig_t, rcControlsConfig, PG_RC_CONTROLS_CONFIG, 0);
     PG_REGISTER(barometerConfig_t, barometerConfig, PG_BAROMETER_CONFIG, 0);
     PG_REGISTER(gpsConfig_t, gpsConfig, PG_GPS_CONFIG, 0);
-    PG_REGISTER(apConfig_t, apConfig, PG_AUTOPILOT, 0);
+    PG_REGISTER(autopilotConfig_t, apConfig, PG_AUTOPILOT, 0);
 
     PG_RESET_TEMPLATE(featureConfig_t, featureConfig,
         .enabledFeatures = 0
@@ -420,7 +420,7 @@ extern "C" {
     uint32_t millis(void) { return 0; }
     uint32_t micros(void) { return 0; }
 
-    bool compassIsHealthy(void) { return true; }
+    bool compassEnabledAndCalibrated(void) { return true; }
     bool baroIsCalibrated(void) { return true; }
     void performBaroCalibrationCycle(void) {}
     float baroCalculateAltitude(void) { return 0; }
@@ -437,6 +437,5 @@ extern "C" {
     float gyroGetFilteredDownsampled(int) { return 0.0f; }
     float baroUpsampleAltitude()  { return 0.0f; }
     float getBaroAltitude(void) { return 3000.0f; }
-    float gpsRescueGetImuYawCogGain(void) { return 1.0f; }
     float getRcDeflectionAbs(int) { return 0.0f; }
 }

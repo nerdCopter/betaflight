@@ -71,7 +71,7 @@ bool sensorsOk(void)
     }
     if (
 #ifdef USE_MAG
-        !compassIsHealthy() &&
+        !compassEnabledAndCalibrated() &&
 #endif
         (!posHoldConfig()->pos_hold_without_mag || !canUseGPSHeading)) {
         return false;
@@ -95,7 +95,7 @@ void updatePosHold(timeUs_t currentTimeUs) {
         posHold.areSensorsOk = sensorsOk();
         if (posHold.areSensorsOk) {
             posHoldCheckSticks();
-            posHold.isControlOk = positionControl(); // false only on sanity check failure
+            posHold.isControlOk = positionControl(); // permanent stop on sanity check failure
         }
     }
 }
