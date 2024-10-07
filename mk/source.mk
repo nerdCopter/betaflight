@@ -21,6 +21,7 @@ PG_SRC = \
             pg/msp.c \
             pg/pg.c \
             pg/piniobox.c \
+            pg/position_control.c \
             pg/pinio.c \
             pg/pin_pull_up_down.c \
             pg/rcdevice.c \
@@ -72,6 +73,7 @@ COMMON_SRC = \
             common/time.c \
             common/typeconversion.c \
             common/uvarint.c \
+            common/vector.c \
             config/config.c \
             config/config_eeprom.c \
             config/config_streamer.c \
@@ -155,6 +157,7 @@ COMMON_SRC = \
             fc/rc_controls.c \
             fc/rc_modes.c \
             flight/position.c \
+            flight/position_control.c \
             flight/failsafe.c \
             flight/gps_rescue.c \
             fc/gps_lap_timer.c \
@@ -408,6 +411,7 @@ SPEED_OPTIMISED_SRC := $(SPEED_OPTIMISED_SRC) \
             common/sdft.c \
             common/stopwatch.c \
             common/typeconversion.c \
+            common/vector.c \
             drivers/accgyro/accgyro_mpu.c \
             drivers/accgyro/accgyro_mpu3050.c \
             drivers/accgyro/accgyro_spi_bmi160.c \

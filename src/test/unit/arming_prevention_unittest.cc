@@ -42,6 +42,7 @@ extern "C" {
     #include "flight/mixer.h"
     #include "flight/pid.h"
     #include "flight/position.h"
+    #include "flight/position_control.h"
     #include "flight/servos.h"
 
     #include "io/beeper.h"
@@ -77,6 +78,7 @@ extern "C" {
     PG_REGISTER(gpsConfig_t, gpsConfig, PG_GPS_CONFIG, 0);
     PG_REGISTER(gpsRescueConfig_t, gpsRescueConfig, PG_GPS_RESCUE, 0);
     PG_REGISTER(positionConfig_t, positionConfig, PG_POSITION, 0);
+    PG_REGISTER(positionControlConfig_t, positionControlConfig, PG_POSITION_CONTROL, 0);
 
     float rcData[MAX_SUPPORTED_RC_CHANNEL_COUNT];
     uint16_t averageSystemLoadPercent = 0;
@@ -1051,7 +1053,7 @@ TEST(ArmingPreventionTest, Paralyze)
 extern "C" {
     uint32_t micros(void) { return simulationTime; }
     uint32_t millis(void) { return micros() / 1000; }
-    bool rxIsReceivingSignal(void) { return simulationHaveRx; }
+    bool isRxReceivingSignal(void) { return simulationHaveRx; }
 
     bool featureIsEnabled(uint32_t f) { return simulationFeatureFlags & f; }
     void warningLedFlash(void) {}
@@ -1128,23 +1130,23 @@ extern "C" {
     bool isUpright(void) { return mockIsUpright; }
     void blackboxLogEvent(FlightLogEvent, union flightLogEventData_u *) {};
     void gyroFiltering(timeUs_t) {};
-    timeDelta_t rxGetFrameDelta(timeDelta_t *) { return 0; }
+    timeDelta_t rxGetFrameDelta() { return 0; }
     void updateRcRefreshRate(timeUs_t) {};
     uint16_t getAverageSystemLoadPercent(void) { return 0; }
     bool isMotorProtocolEnabled(void) { return true; }
     void pinioBoxTaskControl(void) {}
     void schedulerSetNextStateTime(timeDelta_t) {}
-    float getAltitude(void) { return 3000.0f; }
+
+    pidCoefficient_t testAltitudePidCoeffs = {15.0f, 15.0f, 15.1f, 15.0f};
+    const pidCoefficient_t *getAltitudePidCoeffs(void) {
+        return &testAltitudePidCoeffs;
+    }
+    float getAltitudeCm(void) {return 0.0f;}
+    float getAltitudeDerivative(void) {return 0.0f;}
+
     float pt1FilterGain(float, float) { return 0.5f; }
     float pt2FilterGain(float, float)  { return 0.1f; }
     float pt3FilterGain(float, float)  { return 0.1f; }
-    void pt2FilterInit(pt2Filter_t *throttleDLpf, float) {
-        UNUSED(throttleDLpf);
-    }
-    float pt2FilterApply(pt2Filter_t *throttleDLpf, float) {
-        UNUSED(throttleDLpf);
-        return 0.0f;
-    }
     void pt1FilterInit(pt1Filter_t *velocityDLpf, float) {
         UNUSED(velocityDLpf);
     }
@@ -1161,5 +1163,6 @@ extern "C" {
     }
     void getRcDeflectionAbs(void) {}
     uint32_t getCpuPercentageLate(void) { return 0; }
-    bool isAltitudeLow(void) {return false ;};
+    bool crashFlipSuccessful(void) { return false; }
+    bool isBelowLandingAltitude(void) { return false; };
 }

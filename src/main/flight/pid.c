@@ -50,7 +50,7 @@
 #include "flight/gps_rescue.h"
 #include "flight/imu.h"
 #include "flight/mixer.h"
-#include "flight/position.h"
+#include "flight/position_control.h"
 #include "flight/rpm_filter.h"
 
 #include "io/gps.h"
@@ -118,7 +118,7 @@ PG_RESET_TEMPLATE(pidConfig_t, pidConfig,
 
 #define LAUNCH_CONTROL_YAW_ITERM_LIMIT 50 // yaw iterm windup limit when launch mode is "FULL" (all axes)
 
-PG_REGISTER_ARRAY_WITH_RESET_FN(pidProfile_t, PID_PROFILE_COUNT, pidProfiles, PG_PID_PROFILE, 10);
+PG_REGISTER_ARRAY_WITH_RESET_FN(pidProfile_t, PID_PROFILE_COUNT, pidProfiles, PG_PID_PROFILE, 11);
 
 void resetPidProfile(pidProfile_t *pidProfile)
 {
@@ -186,9 +186,9 @@ void resetPidProfile(pidProfile_t *pidProfile)
         .use_integrated_yaw = false,
         .integrated_yaw_relax = 200,
         .thrustLinearization = 0,
-        .d_min = D_MIN_DEFAULT,
-        .d_min_gain = 37,
-        .d_min_advance = 20,
+        .d_max = D_MAX_DEFAULT,
+        .d_max_gain = 37,
+        .d_max_advance = 20,
         .motor_output_limit = 100,
         .auto_profile_cell_count = AUTO_PROFILE_CELL_COUNT_STAY,
         .transient_throttle_limit = 0,
@@ -198,7 +198,6 @@ void resetPidProfile(pidProfile_t *pidProfile)
         .dyn_idle_i_gain = 50,
         .dyn_idle_d_gain = 50,
         .dyn_idle_max_increase = 150,
-        .dyn_idle_start_increase = 50,
         .feedforward_averaging = FEEDFORWARD_AVERAGING_OFF,
         .feedforward_max_rate_limit = 90,
         .feedforward_smooth_factor = 25,
@@ -213,7 +212,7 @@ void resetPidProfile(pidProfile_t *pidProfile)
         .simplified_i_gain = SIMPLIFIED_TUNING_DEFAULT,
         .simplified_d_gain = SIMPLIFIED_TUNING_D_DEFAULT,
         .simplified_pi_gain = SIMPLIFIED_TUNING_DEFAULT,
-        .simplified_dmin_ratio = SIMPLIFIED_TUNING_D_DEFAULT,
+        .simplified_d_max_gain = SIMPLIFIED_TUNING_D_DEFAULT,
         .simplified_feedforward_gain = SIMPLIFIED_TUNING_DEFAULT,
         .simplified_pitch_pi_gain = SIMPLIFIED_TUNING_DEFAULT,
         .simplified_dterm_filter = true,
@@ -247,11 +246,6 @@ void resetPidProfile(pidProfile_t *pidProfile)
         .tpa_curve_pid_thr100 = 70,
         .tpa_curve_expo = 20,
     );
-
-#ifndef USE_D_MIN
-    pidProfile->pid[PID_ROLL].D = 30;
-    pidProfile->pid[PID_PITCH].D = 32;
-#endif
 }
 
 void pgResetFn_pidProfiles(pidProfile_t *pidProfiles)
@@ -327,7 +321,7 @@ float getTpaFactorClassic(float tpaArgument)
     return 1.0f - tpaRate;
 }
 
-void pidUpdateTpaFactor(float throttle, const pidProfile_t *pidProfile)
+void pidUpdateTpaFactor(float throttle)
 {
     // don't permit throttle > 1 & throttle < 0 ? is this needed ? can throttle be > 1 or < 0 at this point
     throttle = constrainf(throttle, 0.0f, 1.0f);
@@ -340,7 +334,7 @@ void pidUpdateTpaFactor(float throttle, const pidProfile_t *pidProfile)
 #endif
 
 #ifdef USE_ADVANCED_TPA
-    switch (pidProfile->tpa_curve_type) {
+    switch (pidRuntime.tpaCurveType) {
     case TPA_CURVE_HYPERBOLIC:
         tpaFactor = pwlInterpolate(&pidRuntime.tpaCurvePwl, tpaArgument);
         break;
@@ -349,7 +343,6 @@ void pidUpdateTpaFactor(float throttle, const pidProfile_t *pidProfile)
         tpaFactor = getTpaFactorClassic(tpaArgument);
     }
 #else
-    UNUSED(pidProfile);
     tpaFactor = getTpaFactorClassic(tpaArgument);
 #endif
 
@@ -822,7 +815,7 @@ static FAST_CODE_NOINLINE void disarmOnImpact(void)
         // for more reliable disarm with gentle controlled landings
         float lowAltitudeSensitivity = 1.0f;
 #ifdef USE_ALT_HOLD_MODE
-        lowAltitudeSensitivity = (FLIGHT_MODE(ALT_HOLD_MODE) && isAltitudeLow()) ? 1.5f : 1.0f;
+        lowAltitudeSensitivity = (FLIGHT_MODE(ALT_HOLD_MODE) && isBelowLandingAltitude()) ? 1.5f : 1.0f;
 #endif
         // and disarm if accelerometer jerk exceeds threshold...
         if ((fabsf(acc.accDelta) * lowAltitudeSensitivity) > pidRuntime.landingDisarmThreshold) {
@@ -951,11 +944,7 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
 
     calculateSpaValues(pidProfile);
 
-#ifdef USE_TPA_MODE
     const float tpaFactorKp = (pidProfile->tpa_mode == TPA_MODE_PD) ? pidRuntime.tpaFactor : 1.0f;
-#else
-    const float tpaFactorKp = pidRuntime.tpaFactor;
-#endif
 
 #ifdef USE_YAW_SPIN_RECOVERY
     const bool yawSpinActive = gyroYawSpinDetected();
@@ -1187,7 +1176,7 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
             pidSetpointDelta = getFeedforward(axis);
         }
 #endif
-        pidRuntime.previousPidSetpoint[axis] = currentPidSetpoint; // this is the value sent to blackbox, and used for Dmin setpoint
+        pidRuntime.previousPidSetpoint[axis] = currentPidSetpoint; // this is the value sent to blackbox, and used for D-max setpoint
 
         // disable D if launch control is active
         if ((pidRuntime.pidCoefficient[axis].Kd > 0) && !launchControlActive) {
@@ -1205,27 +1194,29 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
             }
 #endif
 
-#if defined(USE_D_MIN)
-            float dMinFactor = 1.0f;
-            if (pidRuntime.dMinPercent[axis] > 0) {
-                float dMinGyroFactor = pt2FilterApply(&pidRuntime.dMinRange[axis], delta);
-                dMinGyroFactor = fabsf(dMinGyroFactor) * pidRuntime.dMinGyroGain;
-                const float dMinSetpointFactor = (fabsf(pidSetpointDelta)) * pidRuntime.dMinSetpointGain;
-                dMinFactor = MAX(dMinGyroFactor, dMinSetpointFactor);
-                dMinFactor = pidRuntime.dMinPercent[axis] + (1.0f - pidRuntime.dMinPercent[axis]) * dMinFactor;
-                dMinFactor = pt2FilterApply(&pidRuntime.dMinLowpass[axis], dMinFactor);
-                dMinFactor = MIN(dMinFactor, 1.0f);
+#ifdef USE_D_MAX
+            float dMaxMultiplier = 1.0f;
+            if (pidRuntime.dMaxPercent[axis] > 1.0f) {
+                float dMaxGyroFactor = pt2FilterApply(&pidRuntime.dMaxRange[axis], delta);
+                dMaxGyroFactor = fabsf(dMaxGyroFactor) * pidRuntime.dMaxGyroGain;
+                const float dMaxSetpointFactor = fabsf(pidSetpointDelta) * pidRuntime.dMaxSetpointGain;
+                const float dMaxBoost = fmaxf(dMaxGyroFactor, dMaxSetpointFactor);
+                // dMaxBoost starts at zero, and by 1.0 we get Dmax, but it can exceed 1.
+                dMaxMultiplier += (pidRuntime.dMaxPercent[axis] - 1.0f) * dMaxBoost;
+                dMaxMultiplier = pt2FilterApply(&pidRuntime.dMaxLowpass[axis], dMaxMultiplier);
+                // limit the gain to the fraction that DMax is greater than Min
+                dMaxMultiplier = MIN(dMaxMultiplier, pidRuntime.dMaxPercent[axis]);
                 if (axis == FD_ROLL) {
-                    DEBUG_SET(DEBUG_D_MIN, 0, lrintf(dMinGyroFactor * 100));
-                    DEBUG_SET(DEBUG_D_MIN, 1, lrintf(dMinSetpointFactor * 100));
-                    DEBUG_SET(DEBUG_D_MIN, 2, lrintf(pidRuntime.pidCoefficient[axis].Kd * dMinFactor * 10 / DTERM_SCALE));
+                    DEBUG_SET(DEBUG_D_MAX, 0, lrintf(dMaxGyroFactor * 100));
+                    DEBUG_SET(DEBUG_D_MAX, 1, lrintf(dMaxSetpointFactor * 100));
+                    DEBUG_SET(DEBUG_D_MAX, 2, lrintf(pidRuntime.pidCoefficient[axis].Kd * dMaxMultiplier * 10 / DTERM_SCALE)); // actual D
                 } else if (axis == FD_PITCH) {
-                    DEBUG_SET(DEBUG_D_MIN, 3, lrintf(pidRuntime.pidCoefficient[axis].Kd * dMinFactor * 10 / DTERM_SCALE));
+                    DEBUG_SET(DEBUG_D_MAX, 3, lrintf(pidRuntime.pidCoefficient[axis].Kd * dMaxMultiplier * 10 / DTERM_SCALE));
                 }
             }
 
-            // Apply the dMinFactor
-            preTpaD *= dMinFactor;
+            // Apply the gain that increases D towards Dmax
+            preTpaD *= dMaxMultiplier;
 #endif
 
             pidData[axis].D = preTpaD * pidRuntime.tpaFactor;

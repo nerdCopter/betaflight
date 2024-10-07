@@ -20,21 +20,18 @@
 
 #pragma once
 
-#include "common/axis.h"
-#include "common/maths.h"
-#include "common/vector.h"
+#include <stdint.h>
 
 #include "pg/pg.h"
 
-typedef struct boardAlignment_s {
-    int32_t rollDegrees;
-    int32_t pitchDegrees;
-    int32_t yawDegrees;
-} boardAlignment_t;
+typedef struct positionControlConfig_s {
+    uint16_t hover_throttle;      // value used at the start of a rescue or position hold
+    uint8_t landing_altitude_m;   // altitude below which landing behaviours can change, metres
+    uint8_t altitude_P;
+    uint8_t altitude_I;
+    uint8_t altitude_D;
+    uint8_t altitude_F;
+} positionControlConfig_t;
 
-PG_DECLARE(boardAlignment_t, boardAlignment);
+PG_DECLARE(positionControlConfig_t, positionControlConfig);
 
-void alignSensorViaMatrix(vector3_t *dest, matrix33_t *rotationMatrix);
-void alignSensorViaRotation(vector3_t *dest, sensor_align_e rotation);
-
-void initBoardAlignment(const boardAlignment_t *boardAlignment);

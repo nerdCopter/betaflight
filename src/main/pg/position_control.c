@@ -18,23 +18,22 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-#pragma once
+#include "platform.h"
 
-#include "common/axis.h"
-#include "common/maths.h"
-#include "common/vector.h"
+#include "flight/position_control.h"
 
 #include "pg/pg.h"
+#include "pg/pg_ids.h"
 
-typedef struct boardAlignment_s {
-    int32_t rollDegrees;
-    int32_t pitchDegrees;
-    int32_t yawDegrees;
-} boardAlignment_t;
+#include "position_control.h"
 
-PG_DECLARE(boardAlignment_t, boardAlignment);
+PG_REGISTER_WITH_RESET_TEMPLATE(positionControlConfig_t, positionControlConfig, PG_POSITION_CONTROL, 0);
 
-void alignSensorViaMatrix(vector3_t *dest, matrix33_t *rotationMatrix);
-void alignSensorViaRotation(vector3_t *dest, sensor_align_e rotation);
-
-void initBoardAlignment(const boardAlignment_t *boardAlignment);
+PG_RESET_TEMPLATE(positionControlConfig_t, positionControlConfig,
+    .hover_throttle = 1275,
+    .landing_altitude_m = 4,
+    .altitude_P = 15,
+    .altitude_I = 15,
+    .altitude_D = 15,
+    .altitude_F = 15,
+);
