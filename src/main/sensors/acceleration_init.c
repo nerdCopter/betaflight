@@ -91,7 +91,7 @@
     && !defined(USE_ACC_SPI_MPU6000) && !defined(USE_ACC_SPI_MPU6500) && !defined(USE_ACC_SPI_MPU9250) \
     && !defined(USE_ACC_SPI_ICM20602) && !defined(USE_ACC_SPI_ICM20649) && !defined(USE_ACC_SPI_ICM20689) \
     && !defined(USE_ACCGYRO_BMI160) && !defined(USE_ACCGYRO_BMI270) \
-    && !defined(USE_ACC_SPI_ICM42605) && !defined(USE_ACC_SPI_ICM42688P) \
+    && !defined(USE_ACC_SPI_ICM42605) && !defined(USE_ACC_SPI_ICM42688P) && !defined(USE_ACC_SPI_IIM42653) \
     && !defined(USE_ACCGYRO_LSM6DSO) && !defined(USE_ACCGYRO_LSM6DSV16X) \
     && !defined(USE_VIRTUAL_ACC)
 #error At least one USE_ACC device definition required
@@ -282,9 +282,10 @@ retry:
         FALLTHROUGH;
 #endif
 
-#if defined(USE_ACC_SPI_ICM42605) || defined(USE_ACC_SPI_ICM42688P)
+#if defined(USE_ACC_SPI_ICM42605) || defined(USE_ACC_SPI_ICM42688P) || defined(USE_ACC_SPI_IIM42653)
     case ACC_ICM42605:
     case ACC_ICM42688P:
+    case ACC_IIM42653:
         if (icm426xxSpiAccDetect(dev)) {
             switch (dev->mpuDetectionResult.sensor) {
             case ICM_42605_SPI:
@@ -292,6 +293,9 @@ retry:
                 break;
             case ICM_42688P_SPI:
                 accHardware = ACC_ICM42688P;
+                break;
+            case IIM_42653_SPI:
+                accHardware = ACC_IIM42653;
                 break;
             default:
                 accHardware = ACC_NONE;

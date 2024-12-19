@@ -28,7 +28,7 @@
 
 #include "platform.h"
 
-#if defined(USE_GYRO_SPI_ICM42605) || defined(USE_GYRO_SPI_ICM42688P)
+#if defined(USE_GYRO_SPI_ICM42605) || defined(USE_GYRO_SPI_ICM42688P) || defined(USE_GYRO_SPI_IIM42653)
 
 #include "common/axis.h"
 #include "common/utils.h"
@@ -269,6 +269,9 @@ uint8_t icm426xxSpiDetect(const extDevice_t *dev)
         case ICM42688P_WHO_AM_I_CONST:
             icmDetected = ICM_42688P_SPI;
             break;
+        case IIM42653_WHO_AM_I_CONST:
+            icmDetected = IIM_42653_SPI;
+            break;
         default:
             icmDetected = MPU_NONE;
             break;
@@ -286,15 +289,22 @@ uint8_t icm426xxSpiDetect(const extDevice_t *dev)
 
 void icm426xxAccInit(accDev_t *acc)
 {
-    acc->acc_1G = 512 * 4;
+    switch (acc->mpuDetectionResult.sensor) {
+    case IIM_42653_SPI:
+        acc->acc_1G = 512 * 2; // Accel scale 32g (1024 LSB/g)
+        break;
+    default:
+        acc->acc_1G = 512 * 4; // Accel scale 16g (2048 LSB/g)
+        break;
+    }
 }
 
 bool icm426xxSpiAccDetect(accDev_t *acc)
 {
     switch (acc->mpuDetectionResult.sensor) {
     case ICM_42605_SPI:
-        break;
     case ICM_42688P_SPI:
+    case IIM_42653_SPI:
         break;
     default:
         return false;
@@ -390,8 +400,15 @@ void icm426xxGyroInit(gyroDev_t *gyro)
     spiWriteReg(dev, ICM426XX_RA_GYRO_CONFIG0, (3 - INV_FSR_2000DPS) << 5 | (odrConfig & 0x0F));
     delay(15);
 
+#if defined(USE_ACC_SPI_IIM42653)
+    STATIC_ASSERT(INV_FSR_32G == 4, "INV_FSR_32G must be 4 to generate correct value");
+    // TODO: 4 minus 4 left shifted by 5.... is 0.. why is this here?
+    spiWriteReg(dev, ICM426XX_RA_ACCEL_CONFIG0, (4 - INV_FSR_32G) << 5 | (odrConfig & 0x0F));
+#else
     STATIC_ASSERT(INV_FSR_16G == 3, "INV_FSR_16G must be 3 to generate correct value");
+    // TODO: 3 minus 3 left shifted by 5.... is 0.. why is this here?
     spiWriteReg(dev, ICM426XX_RA_ACCEL_CONFIG0, (3 - INV_FSR_16G) << 5 | (odrConfig & 0x0F));
+#endif
     delay(15);
 }
 
@@ -399,8 +416,11 @@ bool icm426xxSpiGyroDetect(gyroDev_t *gyro)
 {
     switch (gyro->mpuDetectionResult.sensor) {
     case ICM_42605_SPI:
-        break;
     case ICM_42688P_SPI:
+        gyro->scale = GYRO_SCALE_2000DPS;
+        break;
+    case IIM_42653_SPI:
+        gyro->scale = GYRO_SCALE_4000DPS;
         break;
     default:
         return false;
@@ -408,8 +428,6 @@ bool icm426xxSpiGyroDetect(gyroDev_t *gyro)
 
     gyro->initFn = icm426xxGyroInit;
     gyro->readFn = mpuGyroReadSPI;
-
-    gyro->scale = GYRO_SCALE_2000DPS;
 
     return true;
 }
@@ -430,6 +448,7 @@ static aafConfig_t getGyroAafConfig(const mpuSensor_e gyroModel, const aafConfig
         }
 
     case ICM_42688P_SPI:
+    case IIM_42653_SPI:
     default:
         switch (config) {
         case GYRO_HARDWARE_LPF_NORMAL:
@@ -448,4 +467,4 @@ static aafConfig_t getGyroAafConfig(const mpuSensor_e gyroModel, const aafConfig
     }
 }
 
-#endif // USE_GYRO_SPI_ICM42605 || USE_GYRO_SPI_ICM42688P
+#endif // USE_GYRO_SPI_ICM42605 || USE_GYRO_SPI_ICM42688P || USE_GYRO_SPI_IIM42653
