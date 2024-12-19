@@ -147,6 +147,7 @@ enum gyro_fsr_e {
     INV_FSR_500DPS,
     INV_FSR_1000DPS,
     INV_FSR_2000DPS,
+    INV_FSR_4000DPS,
     NUM_GYRO_FSR
 };
 

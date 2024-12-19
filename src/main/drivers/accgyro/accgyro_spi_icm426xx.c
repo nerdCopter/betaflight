@@ -396,17 +396,19 @@ void icm426xxGyroInit(gyroDev_t *gyro)
         gyro->gyroRateKHz = GYRO_RATE_1_kHz;
     }
 
+#if defined(USE_ACC_SPI_IIM42653)
+    STATIC_ASSERT(INV_FSR_4000DPS == 4, "INV_FSR_4000DPS must be 4 to generate correct value");
+    spiWriteReg(dev, ICM426XX_RA_GYRO_CONFIG0, (4 - INV_FSR_4000DPS) << 5 | (odrConfig & 0x0F));
+    delay(15);
+
+    STATIC_ASSERT(INV_FSR_32G == 4, "INV_FSR_32G must be 4 to generate correct value");
+    spiWriteReg(dev, ICM426XX_RA_ACCEL_CONFIG0, (4 - INV_FSR_32G) << 5 | (odrConfig & 0x0F));
+#else
     STATIC_ASSERT(INV_FSR_2000DPS == 3, "INV_FSR_2000DPS must be 3 to generate correct value");
     spiWriteReg(dev, ICM426XX_RA_GYRO_CONFIG0, (3 - INV_FSR_2000DPS) << 5 | (odrConfig & 0x0F));
     delay(15);
 
-#if defined(USE_ACC_SPI_IIM42653)
-    STATIC_ASSERT(INV_FSR_32G == 4, "INV_FSR_32G must be 4 to generate correct value");
-    // TODO: 4 minus 4 left shifted by 5.... is 0.. why is this here?
-    spiWriteReg(dev, ICM426XX_RA_ACCEL_CONFIG0, (4 - INV_FSR_32G) << 5 | (odrConfig & 0x0F));
-#else
     STATIC_ASSERT(INV_FSR_16G == 3, "INV_FSR_16G must be 3 to generate correct value");
-    // TODO: 3 minus 3 left shifted by 5.... is 0.. why is this here?
     spiWriteReg(dev, ICM426XX_RA_ACCEL_CONFIG0, (3 - INV_FSR_16G) << 5 | (odrConfig & 0x0F));
 #endif
     delay(15);
