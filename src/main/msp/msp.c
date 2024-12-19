@@ -4065,20 +4065,16 @@ static mspResult_e mspProcessInCommand(mspDescriptor_t srcDesc, int16_t cmdMSP, 
                     textVar = currentControlRateProfile->profileName;
                     break;
 
-                case MSP2TEXT_CUSTOM_MSG:
-                    {   //handle custom msg from msp
-                        char customRawMessage[MAX_NAME_LENGTH*3] = {0};
-                        const uint8_t textLength = MIN(MAX_NAME_LENGTH*3, sbufReadU8(src));
-                        memset(customRawMessage, 0, textLength);
-
-                        for (unsigned int i = 0; i < textLength; i++) {
-                            customRawMessage[i] = sbufReadU8(src);
-                        }
-                        
-                        unsigned int pointer_offset = 0;
-                        for (unsigned int msg_cnt = 0; msg_cnt < 3; msg_cnt++) {
-                            strncpy(pilotConfigMutable()->message[msg_cnt], customRawMessage + pointer_offset, MAX_NAME_LENGTH - 1);
-                            pointer_offset = pointer_offset + strlen(pilotConfigMutable()->message[msg_cnt]) + 1;
+                case MSP2TEXT_CUSTOM_MSG_0:
+                case MSP2TEXT_CUSTOM_MSG_0 + 1:
+                case MSP2TEXT_CUSTOM_MSG_0 + 2:
+                case MSP2TEXT_CUSTOM_MSG_0 + 3:
+                    {
+                        unsigned msgIdx = textType - MSP2TEXT_CUSTOM_MSG_0;
+                        if (msgIdx < OSD_CUSTOM_MSG_COUNT) {
+                            textVar = pilotConfigMutable()->message[msgIdx];
+                        } else {
+                            return MSP_RESULT_ERROR;
                         }
                     }
                     break;
@@ -4087,13 +4083,12 @@ static mspResult_e mspProcessInCommand(mspDescriptor_t srcDesc, int16_t cmdMSP, 
                     return MSP_RESULT_ERROR;
             }
 
-            if (textType != MSP2TEXT_CUSTOM_MSG) {
-                const uint8_t textLength = MIN(MAX_NAME_LENGTH, sbufReadU8(src));
-                memset(textVar, 0, strlen(textVar));
-                for (unsigned int i = 0; i < textLength; i++) {
-                    textVar[i] = sbufReadU8(src);
-                }
+            const uint8_t textLength = MIN(MAX_NAME_LENGTH, sbufReadU8(src));
+            memset(textVar, 0, strlen(textVar));
+            for (unsigned int i = 0; i < textLength; i++) {
+                textVar[i] = sbufReadU8(src);
             }
+
 #ifdef USE_OSD
             if (textType == MSP2TEXT_PILOT_NAME || textType == MSP2TEXT_CRAFT_NAME) {
                 osdAnalyzeActiveElements();
