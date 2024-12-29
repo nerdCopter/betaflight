@@ -135,6 +135,14 @@ extern "C" {
     }
 
     static const rxSpiConfig_t injectedConfig = {
+        .rx_spi_protocol = 0,
+        .rx_spi_id = 0,
+        .rx_spi_rf_channel_count = 0,
+        .csnTag = IO_TAG(PA0),
+        .spibus = 0,
+        .bindIoTag = IO_TAG(PA0),
+        .ledIoTag = IO_TAG(PA0),
+        .ledInversion = 0,
         .extiIoTag = IO_TAG(PA0),
     };
 }
