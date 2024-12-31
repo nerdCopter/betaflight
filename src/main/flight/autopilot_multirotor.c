@@ -15,6 +15,7 @@
  * along with Betaflight. If not, see <http://www.gnu.org/licenses/>.
  */
 
+
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -141,7 +142,7 @@ void resetPositionControl(const gpsLocation_t *initialTargetLocation, unsigned t
 
 void autopilotInit(void)
 {
-    const autopilotConfig_t *cfg = apConfig();
+    const apConfig_t *cfg = apConfig();
 
     ap.sticksActive = false;
     ap.maxAngle = cfg->ap_max_angle;
