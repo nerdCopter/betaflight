@@ -116,6 +116,13 @@ void pgResetFn_rxConfig(rxConfig_t *rxConfig)
         .crsf_use_negotiated_baud = false,
     );
 
+#if (defined(USE_SERIALRX_CRSF) || defined(USE_SERIALRX_GHST))
+    if (rxRuntimeState.serialrxProvider == SERIALRX_CRSF || rxRuntimeState.serialrxProvider == SERIALRX_GHST) {
+        rxConfigMutable()->mincheck = 1025;
+        rxConfigMutable()->maxcheck = 1975;
+    }
+#endif
+
 #ifdef RX_CHANNELS_TAER
     parseRcChannels("TAER1234", rxConfig);
 #else
