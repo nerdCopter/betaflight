@@ -28,7 +28,7 @@
 
 #include "platform.h"
 
-#if defined(USE_GYRO_SPI_ICM42605) || defined(USE_GYRO_SPI_ICM42688P) || defined(USE_GYRO_SPI_IIM42653)
+#if defined(USE_GYRO_SPI_ICM42605) || defined(USE_GYRO_SPI_ICM42688P) || defined(USE_ACCGYRO_IIM42653)
 
 #include "common/axis.h"
 #include "common/utils.h"
@@ -396,7 +396,7 @@ void icm426xxGyroInit(gyroDev_t *gyro)
         gyro->gyroRateKHz = GYRO_RATE_1_kHz;
     }
 
-#if defined(USE_ACC_SPI_IIM42653)
+#if defined(USE_ACCGYRO_IIM42653)
     STATIC_ASSERT(INV_FSR_4000DPS == 4, "INV_FSR_4000DPS must be 4 to generate correct value");
     spiWriteReg(dev, ICM426XX_RA_GYRO_CONFIG0, (4 - INV_FSR_4000DPS) << 5 | (odrConfig & 0x0F));
     delay(15);
@@ -469,4 +469,4 @@ static aafConfig_t getGyroAafConfig(const mpuSensor_e gyroModel, const aafConfig
     }
 }
 
-#endif // USE_GYRO_SPI_ICM42605 || USE_GYRO_SPI_ICM42688P || USE_GYRO_SPI_IIM42653
+#endif // USE_GYRO_SPI_ICM42605 || USE_GYRO_SPI_ICM42688P || USE_ACCGYRO_IIM42653
