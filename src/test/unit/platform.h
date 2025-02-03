@@ -43,7 +43,9 @@
 
 
 #define PID_PROFILE_COUNT 4
+#ifndef CONTROL_RATE_PROFILE_COUNT
 #define CONTROL_RATE_PROFILE_COUNT  4
+#endif
 #define USE_MAG
 #define USE_BARO
 #define USE_GPS
