@@ -56,6 +56,9 @@ static uint8_t activeMacArray[MAX_MODE_ACTIVATION_CONDITION_COUNT];
 static int activeLinkedMacCount = 0;
 static uint8_t activeLinkedMacArray[MAX_MODE_ACTIVATION_CONDITION_COUNT];
 
+static bool armed_with_turtle = false;
+static bool just_armed = false;
+
 PG_REGISTER_ARRAY(modeActivationCondition_t, MAX_MODE_ACTIVATION_CONDITION_COUNT, modeActivationConditions, PG_MODE_ACTIVATION_PROFILE, 4);
 
 #if defined(USE_CUSTOM_BOX_NAMES)
@@ -167,6 +170,20 @@ void updateActivatedModes(void)
     bitArrayXor(&newMask, sizeof(newMask), &newMask, &andMask);
 
     rcModeUpdate(&newMask);
+
+    if (IS_RC_MODE_ACTIVE(BOXARM) && !just_armed) {
+        just_armed = true;
+        if (IS_RC_MODE_ACTIVE(BOXCRASHFLIP)) {
+            armed_with_turtle = true;
+        }
+    }
+
+    if (!IS_RC_MODE_ACTIVE(BOXARM)) {
+        just_armed = false;
+        armed_with_turtle = false;
+    } else if (armed_with_turtle) { // this fixes turtle mode
+        enableRcMode(BOXCRASHFLIP);
+    }
 
     airmodeEnabled = featureIsEnabled(FEATURE_AIRMODE) || IS_RC_MODE_ACTIVE(BOXAIRMODE);
 }
