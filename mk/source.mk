@@ -306,6 +306,7 @@ COMMON_SRC += \
             drivers/accgyro/accgyro_spi_mpu6500.c \
             drivers/accgyro/accgyro_spi_mpu9250.c \
             drivers/accgyro/accgyro_virtual.c \
+            drivers/accgyro_imuf9001/accgyro_imuf9001_betaflight.c \
             BoschSensortec/BMI270-Sensor-API/bmi270_maximum_fifo.c \
             drivers/barometer/barometer_2smpb_02b.c \
             drivers/barometer/barometer_bmp085.c \

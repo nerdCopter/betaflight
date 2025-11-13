@@ -60,6 +60,10 @@
 #include "drivers/accgyro/accgyro_mpu.h"
 #include "drivers/accgyro/accgyro_spi_icm40609.h"
 
+#ifdef USE_GYRO_IMUF9001
+#include "drivers/accgyro_imuf9001/accgyro_imuf9001.h"
+#endif
+
 #include "pg/pg.h"
 #include "pg/gyrodev.h"
 
@@ -381,6 +385,9 @@ static gyroSpiDetectFn_t gyroSpiDetectFnTable[] = {
 #endif
 #ifdef USE_ACCGYRO_ICM40609D
     icm40609SpiDetect,
+#endif
+#ifdef USE_GYRO_IMUF9001
+    imuf9001SpiDetect,
 #endif
     NULL // Avoid an empty array
 };

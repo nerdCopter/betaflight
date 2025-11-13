@@ -58,6 +58,10 @@
 #include "drivers/accgyro/accgyro_spi_mpu6500.h"
 #include "drivers/accgyro/accgyro_spi_mpu9250.h"
 
+#ifdef USE_GYRO_IMUF9001
+#include "drivers/accgyro_imuf9001/accgyro_imuf9001.h"
+#endif
+
 #include "drivers/accgyro/gyro_sync.h"
 
 #include "fc/runtime_config.h"
@@ -317,6 +321,7 @@ void gyroInitSensor(gyroSensor_t *gyroSensor, const gyroDeviceConfig_t *config)
     case GYRO_ICM42605:
     case GYRO_ICM45686:
     case GYRO_ICM45605:
+    case GYRO_IMUF9001:
         gyroSensor->gyroDev.gyroHasOverflowProtection = true;
         break;
 
@@ -518,6 +523,15 @@ STATIC_UNIT_TESTED gyroHardware_e gyroDetect(gyroDev_t *dev)
     case GYRO_ICM40609D:
         if (icm40609SpiGyroDetect(dev)) {
             gyroHardware = GYRO_ICM40609D;
+            break;
+        }
+        FALLTHROUGH;
+#endif
+
+#ifdef USE_GYRO_IMUF9001
+    case GYRO_IMUF9001:
+        if (imufSpiGyroDetect(dev)) {
+            gyroHardware = GYRO_IMUF9001;
             break;
         }
         FALLTHROUGH;

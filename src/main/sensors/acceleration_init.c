@@ -57,6 +57,10 @@
 #include "drivers/accgyro/accgyro_spi_mpu6500.h"
 #include "drivers/accgyro/accgyro_spi_mpu9250.h"
 
+#ifdef USE_ACC_IMUF9001
+#include "drivers/accgyro_imuf9001/accgyro_imuf9001.h"
+#endif
+
 #include "config/config.h"
 
 #include "drivers/bus_spi.h"
@@ -306,6 +310,15 @@ retry:
     case ACC_ICM40609D:
         if (icm40609SpiAccDetect(dev)) {
             accHardware = ACC_ICM40609D;
+            break;
+        }
+        FALLTHROUGH;
+#endif
+
+#ifdef USE_ACC_IMUF9001
+    case ACC_IMUF9001:
+        if (imufSpiAccDetect(dev)) {
+            accHardware = ACC_IMUF9001;
             break;
         }
         FALLTHROUGH;
