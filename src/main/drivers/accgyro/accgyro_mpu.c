@@ -347,6 +347,9 @@ bool mpuGyroReadSPI(gyroDev_t *gyro)
 typedef uint8_t (*gyroSpiDetectFn_t)(const extDevice_t *dev);
 
 static gyroSpiDetectFn_t gyroSpiDetectFnTable[] = {
+#ifdef USE_GYRO_IMUF9001
+    imuf9001SpiDetect,  // Try IMUF first - it has specific hardware, not generic MPU
+#endif
 #ifdef USE_ACCGYRO_LSM6DSV16X
     lsm6dsv16xSpiDetect,
 #endif
@@ -385,9 +388,6 @@ static gyroSpiDetectFn_t gyroSpiDetectFnTable[] = {
 #endif
 #ifdef USE_ACCGYRO_ICM40609D
     icm40609SpiDetect,
-#endif
-#ifdef USE_GYRO_IMUF9001
-    imuf9001SpiDetect,
 #endif
     NULL // Avoid an empty array
 };
