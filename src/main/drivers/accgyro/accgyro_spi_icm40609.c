@@ -657,18 +657,19 @@ void icm40609GyroInit(gyroDev_t *gyro)
     gyro->accDataReg = ICM40609_ACCEL_DATA_X1_UI;
     gyro->gyroDataReg = ICM40609_GYRO_DATA_X1_UI;
 
-    setGyroAccPowerMode(dev, false);
+    // Enable sensors FIRST before any configuration
+    // Configuration registers are ignored when sensors are powered off
+    setGyroAccPowerMode(dev, true);
+    delay(35); // Wait for sensors to power on and stabilize
 
     icm40609SetEndianess(dev, true);
 
+    // Configure accelerometer full-scale range (16g mode) AFTER sensors are powered on
     icm40609SelectUserBank(dev, ICM40609_USER_BANK_0);
-    spiWriteReg(dev, ICM40609_REG_GYRO_CONFIG0, ICM40609_GYRO_FS_SEL_2000DPS | ICM40609_GYRO_ODR_8KHZ);
-    gyro->scale = GYRO_SCALE_2000DPS;
-    gyro->gyroRateKHz = GYRO_RATE_8_kHz;
-    gyro->gyroSampleRateHz = 8000;
+    spiWriteReg(dev, ICM40609_REG_ACCEL_CONFIG0, ICM40609_ACCEL_FS_SEL_16G | ICM40609_ACCEL_ODR_1KHZ);
+    delay(10); // Allow accel configuration to take effect
 
-    spiWriteReg(dev, ICM40609_REG_ACCEL_CONFIG0, ICM40609_ACCEL_FS_SEL_16G | ICM40609_ACCEL_ODR_1KHZ );
-
+    // Configure filters BEFORE gyro config
     icm40609SetTempFiltBw(dev, ICM40609_TEMP_FILT_BW_4000HZ); // 4000Hz, 0.125ms latency (default)
     icm40609SetGyroUiFiltOrder(dev, ICM40609_UI_FILT_ORDER_3RD);
     icm40609SetAccelUiFiltOrder(dev, ICM40609_UI_FILT_ORDER_3RD);
@@ -706,6 +707,13 @@ void icm40609GyroInit(gyroDev_t *gyro)
 
     icm40609SetGyroHPF(dev, true, ICM40609_HPF_BW_1, ICM40609_HPF_ORDER_1ST);
 
+    // Configure gyro AFTER filters - must be done while sensors are powered on
+    spiWriteReg(dev, ICM40609_REG_GYRO_CONFIG0, ICM40609_GYRO_FS_SEL_2000DPS | ICM40609_GYRO_ODR_8KHZ);
+    gyro->scale = GYRO_SCALE_2000DPS;
+    gyro->gyroRateKHz = GYRO_RATE_8_kHz;
+    gyro->gyroSampleRateHz = 8000;
+    delay(35); // Allow gyro configuration to take effect (per datasheet)
+
     // Enable interrupt
     spiWriteReg(dev, ICM40609_REG_INT_SOURCE0, ICM40609_UI_DRDY_INT1_EN);
 
@@ -722,8 +730,6 @@ void icm40609GyroInit(gyroDev_t *gyro)
         ICM40609_INT_TPULSE_8US |
         ICM40609_INT_TDEASSERT_DISABLED |
         ICM40609_INT_ASYNC_RESET_DISABLED);
-
-    setGyroAccPowerMode(dev, true);
 
 }
 
