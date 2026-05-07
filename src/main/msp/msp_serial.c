@@ -532,11 +532,13 @@ void mspSerialProcess(mspEvaluateNonMspData_e evaluateNonMspData, mspProcessComm
             continue;
         }
 
-        // Abort pending request once per activity burst, not per byte.
-        // Prevents multi-byte sequences (e.g. '#\r') from cancelling CLI entry.
+        // Update lastActivityMs on each burst to reset the 100 ms guard in
+        // mspProcessPendingRequest. pendingRequest is intentionally NOT cleared:
+        // concurrent MSP polling or multi-byte CLI sequences must not cancel
+        // pending CLI-entry or bootloader requests. Only mspProcessPendingRequest
+        // may clear pendingRequest after 100 ms of silence, or requests self-clear.
         if (mspPort->portState == PORT_IDLE && serialRxBytesWaiting(mspPort->port)) {
             mspPort->lastActivityMs = millis();
-            mspPort->pendingRequest = MSP_PENDING_NONE;
         }
 
         // whilst port is idle, poll incoming until portState changes or no more bytes
