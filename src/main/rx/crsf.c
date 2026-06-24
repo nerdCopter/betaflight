@@ -49,6 +49,8 @@
 #include "rx/rx.h"
 #include "rx/crsf.h"
 
+#include "fc/tasks.h"
+
 #include "telemetry/crsf.h"
 
 #define CRSF_TIME_NEEDED_PER_FRAME_US   1750 // a maximally sized 64byte payload will take ~1550us, round up to 1750.
@@ -387,6 +389,9 @@ STATIC_UNIT_TESTED void crsfDataReceive(uint16_t c, void *data)
 #if defined(USE_CRSF_V3)
                 crsfFrameErrorCnt = 0;
 #endif
+#if defined(USE_CRSF_V3) && defined(USE_TELEMETRY_CRSF)
+                crsfScheduleTelemetryResponse();
+#endif
                 switch (crsfFrame.frame.type) {
                 case CRSF_FRAMETYPE_RC_CHANNELS_PACKED:
                 case CRSF_FRAMETYPE_SUBSET_RC_CHANNELS_PACKED:
@@ -656,6 +661,13 @@ bool crsfRxInit(const rxConfig_t *rxConfig, rxRuntimeState_t *rxRuntimeState)
 #ifdef USE_RX_LINK_QUALITY_INFO
     if (linkQualitySource == LQ_SOURCE_NONE) {
         linkQualitySource = LQ_SOURCE_RX_PROTOCOL_CRSF;
+    }
+#endif
+
+#if defined(USE_CRSF_V3) && defined(USE_TELEMETRY_CRSF)
+    task_t *tlmTask = getTask(TASK_TELEMETRY);
+    if (tlmTask) {
+        tlmTask->attribute->checkFunc = crsfTelemetryUpdateCheck;
     }
 #endif
 

@@ -82,6 +82,9 @@
 
 static bool crsfTelemetryEnabled;
 static bool deviceInfoReplyPending;
+#if defined(USE_CRSF_V3)
+static bool telemetryResponsePending;
+#endif
 static uint8_t crsfFrame[CRSF_FRAME_SIZE_MAX];
 
 #if defined(USE_MSP_OVER_TELEMETRY)
@@ -805,6 +808,33 @@ void crsfScheduleDeviceInfoResponse(void)
     deviceInfoReplyPending = true;
 }
 
+#if defined(USE_CRSF_V3)
+FAST_CODE void crsfScheduleTelemetryResponse(void)
+{
+    telemetryResponsePending = true;
+}
+
+// Scheduler check function for event-driven telemetry.
+// Rate-limited to CRSF_TELEMETRY_FRAME_INTERVAL_MAX_US to prevent scheduler starvation
+// at high RC link rates (e.g. 250Hz ELRS) where crsfScheduleTelemetryResponse() fires on every frame.
+bool crsfTelemetryUpdateCheck(timeUs_t currentTimeUs, timeDelta_t currentDeltaTimeUs)
+{
+    UNUSED(currentDeltaTimeUs);
+
+    if (!telemetryResponsePending) {
+        return false;
+    }
+
+    static timeUs_t lastTelemetryCheckTimeUs = 0;
+    if (cmpTimeUs(currentTimeUs, lastTelemetryCheckTimeUs) < CRSF_TELEMETRY_FRAME_INTERVAL_MAX_US) {
+        return false;
+    }
+
+    lastTelemetryCheckTimeUs = currentTimeUs;
+    return true;
+}
+#endif
+
 #if defined(USE_CRSF_CMS_TELEMETRY)
 void crsfHandleDeviceInfoResponse(uint8_t *payload)
 {
@@ -835,6 +865,9 @@ void initCrsfTelemetry(void)
     }
 
     deviceInfoReplyPending = false;
+#if defined(USE_CRSF_V3)
+    telemetryResponsePending = false;
+#endif
 #if defined(USE_MSP_OVER_TELEMETRY)
     mspReplyPending = false;
 #endif
@@ -955,6 +988,14 @@ void handleCrsfTelemetry(timeUs_t currentTimeUs)
     // in between the RX frames.
     crsfRxSendTelemetryData();
 
+#if defined(USE_CRSF_V3)
+    // only send responses on receipt of full frames, this ensures the telemetry rate is never faster
+    // than the frame rate
+    if (!telemetryResponsePending) {
+        return;
+    }
+#endif
+
     // Send ad-hoc response frames as soon as possible
 #if defined(USE_MSP_OVER_TELEMETRY)
     if (mspReplyPending) {
@@ -1029,6 +1070,9 @@ void handleCrsfTelemetry(timeUs_t currentTimeUs)
         crsfLastCycleTime = currentTimeUs;
         processCrsf();
     }
+#if defined(USE_CRSF_V3)
+    telemetryResponsePending = false;
+#endif
 }
 
 #if defined(UNIT_TEST) || defined(USE_RX_EXPRESSLRS)
