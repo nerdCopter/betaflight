@@ -31,6 +31,7 @@
 #include "drivers/io.h"
 #include "fc/rc.h"
 #include "fc/rc_controls.h"
+#include "io/serial.h"
 #include "rx/rx.h"
 #include "rx/rx_spi.h"
 
@@ -62,6 +63,8 @@
 #define SERIALRX_PROVIDER SERIALRX_SUMD
 #elif defined(USE_SERIALRX_SUMH)
 #define SERIALRX_PROVIDER SERIALRX_SUMH
+#elif defined(USE_SERIALRX_MAVLINK)
+#define SERIALRX_PROVIDER SERIALRX_MAVLINK
 #else
 #define SERIALRX_PROVIDER SERIALRX_NONE
 #endif
@@ -88,8 +91,8 @@ void pgResetFn_rxConfig(rxConfig_t *rxConfig)
         .spektrum_sat_bind = 0,
         .spektrum_sat_bind_autoreset = 1,
         .midrc = RX_MID_USEC,
-        .mincheck = 1050,
-        .maxcheck = 1900,
+        .mincheck = RX_MIN_CHECK_DEFAULT,
+        .maxcheck = RX_MAX_CHECK_DEFAULT,
         .rx_min_usec = RX_MIN_USEC,          // any of first 4 channels below this value will trigger rx loss detection
         .rx_max_usec = RX_MAX_USEC,         // any of first 4 channels above this value will trigger rx loss detection
         .rssi_src_frame_errors = false,
@@ -102,9 +105,8 @@ void pgResetFn_rxConfig(rxConfig_t *rxConfig)
         .fpvCamAngleDegrees = 0,
         .airModeActivateThreshold = 25,
         .max_aux_channel = DEFAULT_AUX_CHANNEL_COUNT,
-        .rc_smoothing_mode = 1,
+        .rc_smoothing = 1,
         .rc_smoothing_setpoint_cutoff = 0,
-        .rc_smoothing_feedforward_cutoff = 0,
         .rc_smoothing_throttle_cutoff = 0,
         .rc_smoothing_debug_axis = ROLL,
         .rc_smoothing_auto_factor_rpy = 30,
@@ -114,6 +116,11 @@ void pgResetFn_rxConfig(rxConfig_t *rxConfig)
         .sbus_baud_fast = false,
         .msp_override_channels_mask = 0,
         .crsf_use_negotiated_baud = false,
+#ifdef SERIALRX_UART
+        .rx_uart = SERIALRX_UART,
+#else
+        .rx_uart = SERIAL_PORT_NONE,
+#endif
     );
 
 #ifdef RX_CHANNELS_TAER

@@ -20,6 +20,8 @@
 
 #pragma once
 
+#include "common/time.h"
+
 #include "pg/pg.h"
 #include "drivers/barometer/barometer.h"
 
@@ -35,7 +37,11 @@ typedef enum {
     BARO_DPS310 = 8,
     BARO_2SMPB_02B = 9,
     BARO_LPS22DF = 10,
-    BARO_VIRTUAL = 11,
+    BARO_BMP580 = 11,
+    BARO_BMP581 = 12,
+    BARO_VIRTUAL = 13,
+    BARO_SPA06_003 = 14,
+    BARO_HARDWARE_COUNT
 } baroSensor_e;
 
 typedef struct barometerConfig_s {
@@ -47,17 +53,22 @@ typedef struct barometerConfig_s {
     uint8_t baro_hardware;                  // Barometer hardware to use
     ioTag_t baro_eoc_tag;
     ioTag_t baro_xclr_tag;
+    int16_t baroTempDriftCmPer10C;   // cm per 10°C, signed
 } barometerConfig_t;
 
 PG_DECLARE(barometerConfig_t, barometerConfig);
 
+#ifndef TASK_BARO_RATE_HZ
 #define TASK_BARO_RATE_HZ 40                // Will be overwritten by the baro device driver
+#endif
 
 typedef struct baro_s {
     baroDev_t dev;
     float altitude;
     int32_t temperature;                    // Use temperature for telemetry
     int32_t pressure;                       // Use pressure for telemetry
+    timeUs_t lastDataTimeUs;
+    timeDelta_t dataIntervalUs;
 } baro_t;
 
 extern baro_t baro;
@@ -70,3 +81,5 @@ void baroSetGroundLevel(void);
 uint32_t baroUpdate(timeUs_t currentTimeUs);
 bool isBaroReady(void);
 float getBaroAltitude(void);
+timeUs_t getBaroLatestSampleTimeUs(void);
+timeDelta_t getBaroSampleIntervalUs(void);

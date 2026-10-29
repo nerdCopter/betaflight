@@ -61,6 +61,20 @@
 #define MAYBE_UNUSED __attribute__ ((unused))
 #define LOCAL_UNUSED_FUNCTION __attribute__ ((unused, deprecated ("function is marked as LOCAL_UNUSED_FUNCTION")))
 
+/* Mark a char buffer/pointer as not necessarily NUL-terminated. */
+#ifndef NONSTRING
+        /* Fallback for compilers without __has_attribute. */
+#  ifndef __has_attribute
+#    define __has_attribute(x) 0
+#  endif
+
+#  if __has_attribute(nonstring) || (defined(__GNUC__) && __GNUC__ >= 8)
+#    define NONSTRING __attribute__((__nonstring__))
+#  else
+#    define NONSTRING
+#  endif
+#endif
+
 #define DISCARD(x) (void)(x) // To explicitly ignore result of x (usually an I/O register access).
 
 #ifndef __cplusplus
@@ -70,6 +84,9 @@
 #define STATIC_ASSERT(condition, name) static_assert((condition), #name)
 #endif
 
+#ifdef BIT
+#undef BIT
+#endif
 #define BIT(x) (1 << (x))
 
 /*
@@ -114,7 +131,7 @@ static inline uint32_t llog2(uint32_t n) { return 31 - __builtin_clz(n | 1); }
 
 // using memcpy_fn will force memcpy function call, instead of inlining it. In most cases function call takes fewer instructions
 //  than inlined version (inlining is cheaper for very small moves < 8 bytes / 2 store instructions)
-#if defined(UNIT_TEST) || defined(SIMULATOR_BUILD)
+#if defined(UNIT_TEST) || ENABLE_SIMULATOR
 // Call memcpy when building unittest - this is easier that asm symbol name mangling (symbols start with _underscore on win32)
 #include <string.h>
 static inline void  memcpy_fn ( void * destination, const void * source, size_t num ) { memcpy(destination, source, num); }

@@ -32,8 +32,11 @@
 
 typedef struct opticalflowData_s {
     uint32_t timeStampUs;
-    int16_t quality;
+    int16_t quality;        // 0-100 percentage, only meaningful when flowValid is true
     vector2_t flowRate;
+    bool rangeValid;        // rangefinder distance is within usable bounds
+    bool flowValid;         // sensor reports valid optical flow status
+    bool flowDtValid;       // integration time is positive and finite
 } opticalflowData_t;
 
 struct opticalflowDev_s;
@@ -41,11 +44,16 @@ typedef void opflowOpInitFunc(struct opticalflowDev_s * dev);
 typedef void opflowOpUpdateFunc(struct opticalflowDev_s * dev);
 typedef void opflowOpReadFunc(struct opticalflowDev_s * dev, opticalflowData_t * result);
 
+// History depth for the gyro-rotation compensation. Sized for the slowest
+// gyroDelayUs a driver asks for, at the fastest sample rate it can deliver.
+#define MAX_GYRO_SAMPLE_DELAY 16
+
 typedef struct opticalflowDev_s {
     unsigned delayMs;
     int16_t minRangeCm;
     uint8_t minQualityThreshold;
-    
+    uint32_t gyroDelayUs;        // age of the gyro reading that matches the flow sample
+
     opflowOpInitFunc  *init;
     opflowOpUpdateFunc *update;
     opflowOpReadFunc  *read;

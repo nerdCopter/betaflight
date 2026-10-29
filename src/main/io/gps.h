@@ -32,7 +32,8 @@
 #include "pg/gps.h"
 
 #define GPS_DEGREES_DIVIDER 10000000L
-#define EARTH_ANGLE_TO_CM (111.3195f * 1000 * 100 / GPS_DEGREES_DIVIDER) // 1.113195 cm per latitude unit at the equator (111.3195km/deg)
+#define EARTH_ANGLE_TO_CM (111.3195f * 1000 * 100 / GPS_DEGREES_DIVIDER)  // latitude unit to cm at equator (111km/deg)
+// 1.113195cm per latitude unit at the equator
 #define GPS_X 1
 #define GPS_Y 0
 #define GPS_MIN_SAT_COUNT 4     // number of sats to trigger low sat count sanity check
@@ -179,7 +180,14 @@ typedef enum {
     GPS_UBLOX,
     GPS_MSP,
     GPS_VIRTUAL,
+    GPS_DRONECAN,
 } gpsProvider_e;
+
+// Providers whose frame source is another subsystem (not a UART). These skip
+// the FUNCTION_GPS serial-port lookup in gpsInit() and must not have
+// FEATURE_GPS disabled by validateAndFixConfig() when no port is assigned.
+#define GPS_PROVIDER_REQUIRES_NO_SERIAL_PORT(provider) \
+    ((provider) == GPS_MSP || (provider) == GPS_VIRTUAL || (provider) == GPS_DRONECAN)
 
 typedef enum {
     SBAS_AUTO = 0,
@@ -236,18 +244,41 @@ typedef struct gpsAccuracy_s {
     uint32_t hAcc;                  // horizontal accuracy in mm
     uint32_t vAcc;                  // vertical accuracy in mm
     uint32_t sAcc;                  // speed accuracy in mm/s
+    uint32_t headAcc;               // heading accuracy in degrees * 1e-5
 } gpsAccuracy_t;
+
+/* Only available on U-blox protocol */
+typedef struct gpsVelned_s {
+    int16_t velN; // north velocity, cm/s
+    int16_t velE; // east velocity, cm/s
+    int16_t velD; // down velocity, cm/s
+} gpsVelned_t;
+
+/* GPS date/time from NAV-PVT message */
+typedef struct gpsDateTime_s {
+    uint16_t year;
+    uint8_t month;
+    uint8_t day;
+    uint8_t hour;
+    uint8_t min;
+    uint8_t sec;
+    uint16_t millis;
+    bool valid;                     // true when date/time are valid from GPS
+} gpsDateTime_t;
 
 typedef struct gpsSolutionData_s {
     gpsLocation_t llh;
     gpsDilution_t dop;
     gpsAccuracy_t acc;
+    gpsVelned_t velned;
     uint16_t speed3d;               // speed in cm/s
     uint16_t groundSpeed;           // speed in cm/s
     uint16_t groundCourse;          // degrees * 10
     uint8_t numSat;
+    uint8_t numSatInView;           // 0 when the receiver does not report it
     uint32_t time;                  // GPS msToW
     uint32_t navIntervalMs;         // interval between nav solutions in ms
+    gpsDateTime_t dateTime;         // GPS date/time from NAV-PVT
 } gpsSolutionData_t;
 
 /*
@@ -297,7 +328,7 @@ typedef struct gpsData_s {
 extern gpsLocation_t GPS_home_llh;
 extern uint16_t GPS_distanceToHome;        // distance to home point in meters
 extern uint32_t GPS_distanceToHomeCm;      // distance to home point in cm
-extern int16_t GPS_directionToHome;        // direction to home point in degrees * 10
+extern int16_t GPS_directionToHome;        // direction to home in degrees * 10
 extern uint32_t GPS_distanceFlownInCm;     // distance flown since armed in centimeters
 
 typedef enum {
@@ -393,5 +424,8 @@ void gpsSetFixState(bool state);
 bool gpsHasNewData(uint16_t *stamp);
 float getGpsDataIntervalSeconds(void);  // range 0.05 - 2.5s
 float getGpsDataFrequencyHz(void);      // range 20Hz - 0.4Hz
+float getGpsCosLat(void);
 
 baudRate_e getGpsPortActualBaudRateIndex(void);
+uint32_t gpsDateTimeToEpoch(const gpsDateTime_t *dt);
+void gpsUnixSecondsToDateTime(gpsDateTime_t *dt, int64_t unixSeconds, uint16_t millis);

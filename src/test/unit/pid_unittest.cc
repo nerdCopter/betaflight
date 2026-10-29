@@ -66,7 +66,7 @@ extern "C" {
     #include "flight/pid.h"
     #include "flight/pid_init.h"
     #include "flight/position.h"
-    
+
     #include "io/gps.h"
 
     #include "pg/pg.h"
@@ -82,8 +82,7 @@ extern "C" {
     gyro_t gyro;
     attitudeEulerAngles_t attitude;
 
-    rxRuntimeState_t rxRuntimeState = {};
-
+    PG_REGISTER(rxConfig_t, rxConfig, PG_RX_CONFIG, 0);
     PG_REGISTER(accelerometerConfig_t, accelerometerConfig, PG_ACCELEROMETER_CONFIG, 0);
     PG_REGISTER(systemConfig_t, systemConfig, PG_SYSTEM_CONFIG, 2);
     PG_REGISTER(positionConfig_t, positionConfig, PG_SYSTEM_CONFIG, 4);
@@ -125,6 +124,38 @@ extern "C" {
 
 pidProfile_t *pidProfile;
 
+TEST(PidProfileStorageTest, RejectsProfilesFromBeforeSpeedCurveFields)
+{
+    const pgRegistry_t *registry = pgFind(PG_PID_PROFILE);
+    ASSERT_NE(nullptr, registry);
+
+    // Version 12 stored smaller array elements, so copying that array would
+    // shift every profile after the first one into unrelated settings.
+    uint8_t savedProfiles[PID_PROFILE_COUNT * 228];
+    memset(savedProfiles, 0xFF, sizeof(savedProfiles));
+    pgReset(registry);
+    pidProfile_t defaults[PID_PROFILE_COUNT];
+    memcpy(defaults, pidProfilesMutable(0), sizeof(defaults));
+
+    EXPECT_FALSE(pgLoad(registry, savedProfiles, sizeof(savedProfiles), 12));
+    EXPECT_EQ(0, memcmp(defaults, pidProfilesMutable(0), sizeof(defaults)));
+}
+
+TEST(PidProfileStorageTest, LoadsCurrentProfilesWithoutShiftingSettings)
+{
+    const pgRegistry_t *registry = pgFind(PG_PID_PROFILE);
+    ASSERT_NE(nullptr, registry);
+    pgReset(registry);
+    for (unsigned i = 0; i < PID_PROFILE_COUNT; i++) {
+        pidProfilesMutable(i)->pid[PID_ROLL].P = 77 + i;
+        pidProfilesMutable(i)->speed_curve_vref = 30 + i;
+    }
+    pidProfile_t savedProfiles[PID_PROFILE_COUNT];
+    ASSERT_EQ(sizeof(savedProfiles), pgStore(registry, savedProfiles, sizeof(savedProfiles)));
+    ASSERT_TRUE(pgLoad(registry, savedProfiles, sizeof(savedProfiles), pgVersion(registry)));
+    EXPECT_EQ(0, memcmp(savedProfiles, pidProfilesMutable(0), sizeof(savedProfiles)));
+}
+
 int loopIter = 0;
 
 // Always use same defaults for testing in future releases even when defaults change
@@ -137,7 +168,7 @@ void setDefaultTestSettings(void)
     pidProfile->pid[PID_YAW]   =  { 70, 45, 20, 60, 0 };
     pidProfile->pid[PID_LEVEL] =  { 50, 50, 75, 50, 0 };
 
-    // Compensate for the upscaling done without 'use_integrated_yaw'
+    // Compensate for the upscaling done on the yaw axis
     pidProfile->pid[PID_YAW].I = pidProfile->pid[PID_YAW].I / 2.5f;
 
     pidProfile->pidSumLimit = PIDSUM_LIMIT;        // 500
@@ -147,7 +178,7 @@ void setDefaultTestSettings(void)
     pidProfile->dterm_lpf2_static_hz = 0;
     pidProfile->dterm_notch_hz = 260;
     pidProfile->dterm_notch_cutoff = 160;
-    pidProfile->dterm_lpf1_type = FILTER_BIQUAD;
+    pidProfile->dterm_lpf1_type = FILTER_SVF;
     pidProfile->itermWindup = 80;
     pidProfile->pidAtMinThrottle = PID_STABILISATION_ON;
     pidProfile->angle_limit = 60;
@@ -173,7 +204,6 @@ void setDefaultTestSettings(void)
     pidProfile->iterm_relax = ITERM_RELAX_OFF,
     pidProfile->iterm_relax_cutoff = 11,
     pidProfile->iterm_relax_type = ITERM_RELAX_SETPOINT,
-    pidProfile->abs_control_gain = 0,
     pidProfile->launchControlMode = LAUNCH_CONTROL_MODE_NORMAL,
     pidProfile->launchControlGain = 40,
     pidProfile->level_race_mode = false,
@@ -339,12 +369,12 @@ TEST(pidControllerTest, testPidLoop)
     EXPECT_NEAR(-31.3, pidData[FD_ROLL].I, calculateTolerance(-31.3));
     EXPECT_NEAR(29.3, pidData[FD_PITCH].I, calculateTolerance(29.3));
     EXPECT_NEAR(-1.76, pidData[FD_YAW].I, calculateTolerance(-1.76));
-        EXPECT_NEAR(-24.2, pidData[FD_YAW].Sum, calculateTolerance(-24.2)); 
+        EXPECT_NEAR(-24.2, pidData[FD_YAW].Sum, calculateTolerance(-24.2));
 
     // Match the stick to gyro to stop error
     simulatedSetpointRate[FD_ROLL] = 100;
     simulatedSetpointRate[FD_PITCH] = -100;
-    simulatedSetpointRate[FD_YAW] = 10; // error 
+    simulatedSetpointRate[FD_YAW] = 10; // error
 
     pidController(pidProfile, currentTestTime());
     // Iterm is stalled as it is not accumulating anymore
@@ -353,7 +383,7 @@ TEST(pidControllerTest, testPidLoop)
     EXPECT_FLOAT_EQ(0, pidData[FD_YAW].P);
     EXPECT_NEAR(-31.3, pidData[FD_ROLL].I, calculateTolerance(-31.3));
     EXPECT_NEAR(29.3, pidData[FD_PITCH].I, calculateTolerance(29.3));
-    EXPECT_NEAR(-1.76, pidData[FD_YAW].I, calculateTolerance(-1.76)); 
+    EXPECT_NEAR(-1.76, pidData[FD_YAW].I, calculateTolerance(-1.76));
     EXPECT_FLOAT_EQ(0, pidData[FD_ROLL].D);
     EXPECT_FLOAT_EQ(0, pidData[FD_PITCH].D);
     EXPECT_FLOAT_EQ(0, pidData[FD_YAW].D);
@@ -368,7 +398,7 @@ TEST(pidControllerTest, testPidLoop)
     EXPECT_FLOAT_EQ(0, pidData[FD_YAW].P);
     EXPECT_NEAR(-31.3, pidData[FD_ROLL].I, calculateTolerance(-31.3));
     EXPECT_NEAR(29.3, pidData[FD_PITCH].I, calculateTolerance(29.3));
-    EXPECT_NEAR(-1.76, pidData[FD_YAW].I, calculateTolerance(-1.76)); 
+    EXPECT_NEAR(-1.76, pidData[FD_YAW].I, calculateTolerance(-1.76));
     EXPECT_FLOAT_EQ(0, pidData[FD_ROLL].D);
     EXPECT_FLOAT_EQ(0, pidData[FD_PITCH].D);
     EXPECT_FLOAT_EQ(0, pidData[FD_YAW].D);
@@ -566,7 +596,7 @@ TEST(pidControllerTest, testMixerSaturation)
     EXPECT_NEAR(21.1f, pidData[FD_YAW].I, calculateTolerance(21.1));
 
     // Expect iterm  roll + pitch to stop at limit of 400
-    // yaw is still growing, 
+    // yaw is still growing,
     pidController(pidProfile, currentTestTime());
     EXPECT_NEAR(400.0f, pidData[FD_ROLL].I, calculateTolerance(400.0f));
     EXPECT_NEAR(-400.0f, pidData[FD_PITCH].I, calculateTolerance(-400.0f));
@@ -787,6 +817,20 @@ TEST(pidControllerTest, testFeedForward)
     EXPECT_FLOAT_EQ(0, pidData[FD_YAW].F);
 }
 
+// pidInit() runs from readEEPROM() before rxInit(), so the CRSF check must not depend on rx runtime state
+TEST(pidControllerTest, testFeedforwardInterpolateFollowsRxConfig)
+{
+    resetTest();
+
+    rxConfigMutable()->serialrx_provider = SERIALRX_CRSF;
+    pidInit(pidProfile);
+    EXPECT_FALSE(pidRuntime.feedforwardInterpolate);
+
+    rxConfigMutable()->serialrx_provider = SERIALRX_SBUS;
+    pidInit(pidProfile);
+    EXPECT_TRUE(pidRuntime.feedforwardInterpolate);
+}
+
 TEST(pidControllerTest, testItermRelax)
 {
     resetTest();
@@ -862,35 +906,6 @@ TEST(pidControllerTest, testItermRelax)
 }
 
 // TODO - Add more tests
-TEST(pidControllerTest, testAbsoluteControl)
-{
-    resetTest();
-    pidProfile->abs_control_gain = 10;
-    pidInit(pidProfile);
-    ENABLE_ARMING_FLAG(ARMED);
-    pidStabilisationState(PID_STABILISATION_ON);
-
-    float gyroRate = 0;
-
-    float itermErrorRate = 10;
-    float currentPidSetpoint = 10;
-
-    applyAbsoluteControl(FD_PITCH, gyroRate, &currentPidSetpoint, &itermErrorRate);
-
-    EXPECT_NEAR(10.8, itermErrorRate, calculateTolerance(10.8));
-    EXPECT_NEAR(10.8, currentPidSetpoint, calculateTolerance(10.8));
-
-    applyAbsoluteControl(FD_PITCH, gyroRate, &currentPidSetpoint, &itermErrorRate);
-    EXPECT_NEAR(10.8, itermErrorRate, calculateTolerance(10.8));
-    EXPECT_NEAR(10.8, currentPidSetpoint, calculateTolerance(10.8));
-
-    gyroRate = -53;
-    axisError[FD_PITCH] = -60;
-    applyAbsoluteControl(FD_PITCH, gyroRate, &currentPidSetpoint, &itermErrorRate);
-    EXPECT_NEAR(-79.2, itermErrorRate, calculateTolerance(-79.2));
-    EXPECT_NEAR(-79.2, currentPidSetpoint, calculateTolerance(-79.2));
-}
-
 TEST(pidControllerTest, testDtermFiltering)
 {
 // TODO
@@ -923,16 +938,12 @@ TEST(pidControllerTest, testItermRotationHandling)
     EXPECT_NEAR(860.37, pidData[FD_PITCH].I, calculateTolerance(860.37));
     EXPECT_NEAR(1139.6, pidData[FD_YAW].I, calculateTolerance(1139.6));
 
-    pidProfile->abs_control_gain = 10;
     pidInit(pidProfile);
     pidData[FD_ROLL].I = 10;
     pidData[FD_PITCH].I = 1000;
     pidData[FD_YAW].I = 1000;
 
     gyro.gyroADCf[FD_ROLL] = -1000;
-    // FIXME - axisError changes don't affect the system. This is a potential bug or intendend behaviour?
-    axisError[FD_PITCH] = 1000;
-    axisError[FD_YAW] = 1000;
     rotateItermAndAxisError();
     EXPECT_FLOAT_EQ(pidData[FD_ROLL].I, 10);
     EXPECT_NEAR(860.37, pidData[FD_PITCH].I, calculateTolerance(860.37));

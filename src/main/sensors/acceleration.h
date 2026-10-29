@@ -30,6 +30,8 @@
 
 #include "sensors/sensors.h"
 
+#define ACC_TRIM_MAX 300
+
 // Type of accelerometer used/detected
 // Acc hardware types were updated in PR #14087 (removed ACC_ADXL345, ACC_MMA8452, ACC_BMA280, ACC_LSM303DLHC)
 typedef enum {
@@ -55,7 +57,14 @@ typedef enum {
     ACC_ICM45686,
     ACC_ICM40609D,
     ACC_IIM42652,
-    ACC_VIRTUAL
+    ACC_LSM6DSK320X,
+    ACC_ICM42622P,
+    ACC_ICM42686P,
+    ACC_ICM56686,
+    ACC_BMI423,
+    ACC_VIRTUAL,
+    ACC_LSM6DSV32X,
+    ACC_HARDWARE_COUNT
 } accelerationSensor_e;
 
 typedef struct acc_s {
@@ -102,3 +111,8 @@ union flightDynamicsTrims_u;
 void setAccelerationTrims(union flightDynamicsTrims_u *accelerationTrimsToUse);
 void accInitFilters(void);
 void applyAccelerometerTrimsDelta(union rollAndPitchTrims_u *rollAndPitchTrimsDelta);
+#ifdef USE_CRSF_ACCGYRO_TELEMETRY
+bool accelHasDownsampledData(void);
+float accelGetDownsampled(int axis);
+bool accelStartDownsampledCycle(void);
+#endif

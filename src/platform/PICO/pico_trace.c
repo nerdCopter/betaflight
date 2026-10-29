@@ -19,40 +19,30 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "platform.h"
 #include "pico_trace.h"
 #include "pico/stdio.h"
 #include "pico/stdio_uart.h"
 #include "pico/platform/compiler.h"
 
-static int depth;
-
-static const char* prefix[]= {
-    "-- ",
-    "--- ",
-    "---- ",
-    "----- ",
-    "------ ",
-    "------- "
-};
-
-static const int plen = sizeof(prefix)/sizeof(prefix[0]);
-
-void picotrace_prefix(void)
-{
-    stdio_printf(prefix[depth%plen]);
-}
+#if !defined(PICO_TRACE_UART_INSTANCE) || !defined(PICO_TRACE_TX_GPIO)
+#error PICO_TRACE build requires defines for PICO_TRACE_UART_INSTANCE, PICO_TRACE_TX_GPIO
+#endif
 
 // Wrap main to insert the initialisation code.
 extern int main(int argc, char * argv[]);
 extern int REAL_FUNC(main)(int argc, char * argv[]);
+
+#ifndef PICO_TRACE_BAUD_RATE
+#define PICO_TRACE_BAUD_RATE 115200
+#endif
+
 int WRAPPER_FUNC(main)(int argc, char * argv[])
 {
     //stdio_init_all();
-    stdio_uart_init();
+    stdio_uart_init_full(UART_INSTANCE(PICO_TRACE_UART_INSTANCE), PICO_TRACE_BAUD_RATE, PICO_TRACE_TX_GPIO, -1);
     tprintf("\n=== Betaflight main ===");
-    depth++;
     int mr = REAL_FUNC(main)(argc, argv);
-    depth--;
     tprintf("\n=== Betaflight main end ===");
     return mr;
 }
@@ -63,7 +53,7 @@ int WRAPPER_FUNC(main)(int argc, char * argv[])
     void WRAPPER_FUNC(x)(void)                  \
     {                                           \
         tprintf("Enter " #x "");                \
-        depth++;REAL_FUNC(x)();depth--;         \
+        REAL_FUNC(x)();                         \
         tprintf("Exit  " #x "");                \
     }
 
@@ -73,9 +63,7 @@ int WRAPPER_FUNC(main)(int argc, char * argv[])
     bool WRAPPER_FUNC(x)(void)                  \
     {                                           \
         tprintf("Enter " #x "");                \
-        depth++;                                \
         bool ret__ = REAL_FUNC(x)();            \
-        depth--;                                \
         tprintf("Exit  " #x "");                \
         return ret__;                           \
     }
@@ -86,17 +74,18 @@ int WRAPPER_FUNC(main)(int argc, char * argv[])
     void WRAPPER_FUNC(x)(bool xyz__)                  \
     {                                                 \
         tprintf("Enter " #x " [%d]", xyz__);          \
-        depth++; REAL_FUNC(x)(xyz__); depth--;        \
+        REAL_FUNC(x)(xyz__);                          \
         tprintf("Exit  " #x "");                      \
     }
 
 
 // remember to add to PICO_WRAPPED_FUNCTIONS in PICO_trace.mk
-TRACEvoidvoid(init)
+    TRACEvoidvoid(initPhase1)
+    TRACEvoidvoid(initPhase2)
+    TRACEvoidvoid(initPhase3)
     TRACEvoidvoid(initEEPROM)
     TRACEvoidvoid(isEEPROMVersionValid)
     TRACEvoidvoid(writeUnmodifiedConfigToEEPROM)
-    TRACEboolvoid(resetEEPROM)
     TRACEvoidvoid(resetConfig)
     TRACEvoidvoid(pgResetAll)
     TRACEvoidbool(serialInit)

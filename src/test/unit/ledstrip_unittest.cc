@@ -311,12 +311,13 @@ batteryState_e getBatteryState(void)
     return BATTERY_OK;
 }
 
-void ws2811LedStripInit(ioTag_t ioTag)
+void ws2811LedStripInit(ioTag_t ioTag, ledStripFormatRGB_e ledFormat)
 {
     UNUSED(ioTag);
+    UNUSED(ledFormat);
 }
 
-bool ws2811UpdateStrip(ledStripFormatRGB_e, uint8_t) {return true;}
+bool ws2811UpdateStrip(uint8_t) {return true;}
 
 void setLedValue(uint16_t index, const uint8_t value)
 {
@@ -375,6 +376,17 @@ bool featureIsEnabled(uint32_t mask)
 void tfp_sprintf(char *, char*, ...) { }
 
 int scaleRange(int x, int srcMin, int srcMax, int destMin, int destMax)
+{
+    UNUSED(x);
+    UNUSED(srcMin);
+    UNUSED(srcMax);
+    UNUSED(destMin);
+    UNUSED(destMax);
+
+    return 0;
+}
+
+float scaleRangef(float x, float srcMin, float srcMax, float destMin, float destMax)
 {
     UNUSED(x);
     UNUSED(srcMin);

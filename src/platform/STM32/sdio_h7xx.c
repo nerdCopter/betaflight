@@ -39,6 +39,7 @@
 #include "drivers/io.h"
 #include "drivers/io_impl.h"
 #include "drivers/nvic.h"
+#include "drivers/dma.h"
 #include "drivers/sdio.h"
 
 typedef struct SD_Handle_s
@@ -209,7 +210,7 @@ void HAL_SD_MspInit(SD_HandleTypeDef* hsd)
     HAL_NVIC_EnableIRQ(sdioHardware->irqn);
 }
 
-void SDIO_GPIO_Init(void)
+void sdioInitialize(void)
 {
     if (!sdioHardware) {
         return;
@@ -255,7 +256,7 @@ void SDIO_GPIO_Init(void)
     IOConfigGPIO(cmd, IOCFG_OUT_PP);
 }
 
-bool SD_Initialize_LL(DMA_Stream_TypeDef *dma)
+bool SD_InitialiseHardware(dmaResource_t *dma)
 {
     UNUSED(dma);
 
@@ -288,7 +289,7 @@ static SD_Error_t SD_DoInit(void)
 #if !defined(SDIO_CLOCK_DIV)
 # if defined(STM32H730xx)
 #  define SDIO_CLOCK_DIV 2  // 200Mhz / (2 * 2 ) = 50Mhz, used for "UltraHigh speed SD card" only, see    HAL_SD_ConfigWideBusOperation, SDMMC_HSpeed_CLK_DIV, SDMMC_NSpeed_CLK_DIV
-# else 
+# else
 #  define SDIO_CLOCK_DIV 1  // 200Mhz / (2 * 1 ) = 100Mhz, used for "UltraHigh speed SD card" only, see    HAL_SD_ConfigWideBusOperation, SDMMC_HSpeed_CLK_DIV, SDMMC_NSpeed_CLK_DIV
 # endif
 #endif

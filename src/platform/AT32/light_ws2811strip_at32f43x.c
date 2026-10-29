@@ -33,12 +33,15 @@
 
 #include "drivers/dma.h"
 #include "drivers/dma_reqmap.h"
+#include "platform/dma.h"
 #include "drivers/io.h"
 #include "drivers/nvic.h"
 #include "platform/rcc.h"
 #include "drivers/timer.h"
+#include "platform/timer.h"
 
 #include "drivers/light_ws2811strip.h"
+#include "platform/light_ws2811strip_stm32.h"
 
 static IO_t ws2811IO = IO_NONE;
 
@@ -71,19 +74,19 @@ static void WS2811_DMA_IRQHandler(dmaChannelDescriptor_t *descriptor)
     }
 }
 
-bool ws2811LedStripHardwareInit(ioTag_t ioTag)
+bool ws2811LedStripHardwareInit(void)
 {
-    if (!ioTag) {
+    if (!ledStripIoTag) {
         return false;
     }
 
-    const timerHardware_t *timerHardware = timerAllocate(ioTag, OWNER_LED_STRIP, 0);
+    const timerHardware_t *timerHardware = timerAllocate(ledStripIoTag, OWNER_LED_STRIP, 0);
 
     if (timerHardware == NULL) {
         return false;
     }
 
-    timer = timerHardware->tim;
+    timer = (tmr_type *)timerHardware->tim;
 
 #if defined(USE_DMA_SPEC)
     const dmaChannelSpec_t *dmaSpec = dmaGetChannelSpecByTimer(timerHardware);
@@ -102,19 +105,19 @@ bool ws2811LedStripHardwareInit(ioTag_t ioTag)
         return false;
     }
 
-    ws2811IO = IOGetByTag(ioTag);
+    ws2811IO = IOGetByTag(ledStripIoTag);
     IOInit(ws2811IO, OWNER_LED_STRIP, 0);
 
     IOConfigGPIOAF(ws2811IO, IOCFG_AF_PP, timerHardware->alternateFunction);
 
-    RCC_ClockCmd(timerRCC(timer), ENABLE);
+    RCC_ClockCmd(timerRCC(timerHardware->tim), ENABLE);
 
     // Stop timer
     tmr_counter_enable(timer, FALSE);
 
     /* Compute the prescaler value */
-    uint16_t prescaler = timerGetPrescalerByDesiredMhz(timer, WS2811_TIMER_MHZ);
-    uint16_t period = timerGetPeriodByPrescaler(timer, prescaler, WS2811_CARRIER_HZ);
+    uint16_t prescaler = timerGetPrescalerByDesiredMhz(timerHardware->tim, WS2811_TIMER_MHZ);
+    uint16_t period = timerGetPeriodByPrescaler(timerHardware->tim, prescaler, WS2811_CARRIER_HZ);
 
     BIT_COMPARE_1 = period / 3 * 2;
     BIT_COMPARE_0 = period / 3;
@@ -159,7 +162,7 @@ bool ws2811LedStripHardwareInit(ioTag_t ioTag)
     xDMA_DeInit(dmaRef);
 
     dma_init_type dma_init_struct;
-    dma_init_struct.peripheral_base_addr = (uint32_t)timerCCR(timer, timerHardware->channel);
+    dma_init_struct.peripheral_base_addr = (uint32_t)timerCCR(timerHardware->tim, timerHardware->channel);
     dma_init_struct.buffer_size = WS2811_DMA_BUFFER_SIZE;
     dma_init_struct.peripheral_inc_enable = FALSE;
     dma_init_struct.memory_inc_enable = TRUE;
@@ -192,12 +195,12 @@ bool ws2811LedStripHardwareInit(ioTag_t ioTag)
     return true;
 }
 
-void ws2811LedStripDMAEnable(void)
+void ws2811LedStripStartTransfer(void)
 {
+    xDMA_Cmd(dmaRef, FALSE);
     xDMA_SetCurrDataCounter(dmaRef, WS2811_DMA_BUFFER_SIZE);
     tmr_counter_value_set(timer, 0);
     tmr_counter_enable(timer, TRUE);
     xDMA_Cmd(dmaRef, TRUE);
-
 }
 #endif

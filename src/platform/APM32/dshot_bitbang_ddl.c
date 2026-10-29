@@ -34,6 +34,7 @@
 #include "drivers/io_impl.h"
 #include "drivers/dma.h"
 #include "drivers/dma_reqmap.h"
+#include "platform/dma.h"
 #include "drivers/dshot.h"
 #include "dshot_bitbang_impl.h"
 #include "drivers/dshot_command.h"
@@ -42,6 +43,7 @@
 #include "drivers/pwm_output.h" // XXX for pwmOutputPort_t motors[]; should go away with refactoring
 #include "drivers/time.h"
 #include "drivers/timer.h"
+#include "platform/timer.h"
 
 #include "pg/motor.h"
 
@@ -83,23 +85,23 @@ void bbTimerChannelInit(bbPort_t *bbPort)
     ocInit.OCPolarity = DDL_TMR_OCPOLARITY_LOW;
     ocInit.CompareValue = 10; // Duty doesn't matter, but too value small would make monitor output invalid
 
-    DDL_TMR_DisableCounter(bbPort->timhw->tim);
+    DDL_TMR_DisableCounter((TMR_TypeDef *)bbPort->timhw->tim);
 
-    DDL_TMR_OC_Init(timhw->tim, bbPort->llChannel, &ocInit);
+    DDL_TMR_OC_Init((TMR_TypeDef *)timhw->tim, bbPort->llChannel, &ocInit);
 
-    DDL_TMR_OC_EnablePreload(timhw->tim, bbPort->llChannel);
+    DDL_TMR_OC_EnablePreload((TMR_TypeDef *)timhw->tim, bbPort->llChannel);
 
 #ifdef DEBUG_MONITOR_PACER
     if (timhw->tag) {
         IO_t io = IOGetByTag(timhw->tag);
         IOConfigGPIOAF(io, IOCFG_AF_PP, timhw->alternateFunction);
         IOInit(io, OWNER_DSHOT_BITBANG, 0);
-        DDL_TMR_EnableAllOutputs(timhw->tim);
+        DDL_TMR_EnableAllOutputs((TMR_TypeDef *)timhw->tim);
     }
 #endif
 
     // Enable and keep it running
-    DDL_TMR_EnableCounter(bbPort->timhw->tim);
+    DDL_TMR_EnableCounter((TMR_TypeDef *)bbPort->timhw->tim);
 }
 
 #ifdef USE_DMA_REGISTER_CACHE
@@ -122,8 +124,18 @@ static void bbSaveDMARegs(dmaResource_t *dmaResource, dmaRegCache_t *dmaRegCache
 }
 #endif
 
-void bbSwitchToOutput(bbPort_t * bbPort)
+bool bbSwitchToOutput(bbPort_t * bbPort)
 {
+    dmaResource_t *dmaResource = bbPort->dmaResource;
+
+    // Stop the stream before touching anything: if it will not stop we must not
+    // rewrite its registers, and leaving the pin an input keeps us off a wire
+    // that something is evidently still driving.
+    bbDMA_Cmd(bbPort, DISABLE);
+    if (!bbDMAWaitStopped(bbPort)) {
+        return false;
+    }
+
     // Output idle level before switching to output
     // Use BSC register for this
     // Normal: Use BC (higher half)
@@ -139,9 +151,7 @@ void bbSwitchToOutput(bbPort_t * bbPort)
 
     // Reinitialize port group DMA for output
 
-    dmaResource_t *dmaResource = bbPort->dmaResource;
 #ifdef USE_DMA_REGISTER_CACHE
-    bbDMA_Cmd(bbPort, DISABLE);
     bbLoadDMARegs(dmaResource, &bbPort->dmaRegOutput);
 #else
     xDDL_EX_DMA_Deinit(dmaResource);
@@ -152,9 +162,11 @@ void bbSwitchToOutput(bbPort_t * bbPort)
 
     // Reinitialize pacer timer for output
 
-    bbPort->timhw->tim->AUTORLD = bbPort->outputARR;
+    ((TMR_TypeDef *)bbPort->timhw->tim)->AUTORLD = bbPort->outputARR;
 
     bbPort->direction = DSHOT_BITBANG_DIRECTION_OUTPUT;
+
+    return true;
 }
 
 #ifdef USE_DSHOT_TELEMETRY
@@ -181,7 +193,7 @@ void bbSwitchToInput(bbPort_t *bbPort)
 
     // Reinitialize pacer timer for input
 
-    bbPort->timhw->tim->AUTORLD = bbPort->inputARR;
+    ((TMR_TypeDef *)bbPort->timhw->tim)->AUTORLD = bbPort->inputARR;
 
     bbDMA_Cmd(bbPort, ENABLE);
 
@@ -241,16 +253,16 @@ void bbTIM_TimeBaseInit(bbPort_t *bbPort, uint16_t period)
     init->CounterMode = DDL_TMR_COUNTERMODE_UP;
     init->Autoreload = period;
     //TIM_TimeBaseInit(bbPort->timhw->tim, &bbPort->timeBaseInit);
-    DDL_TMR_Init(bbPort->timhw->tim, init);
-    MODIFY_REG(bbPort->timhw->tim->CTRL1, TMR_CTRL1_ARPEN, TMR_AUTORELOAD_PRELOAD_ENABLE);
+    DDL_TMR_Init((TMR_TypeDef *)bbPort->timhw->tim, init);
+    MODIFY_REG(((TMR_TypeDef *)bbPort->timhw->tim)->CTRL1, TMR_CTRL1_ARPEN, TMR_AUTORELOAD_PRELOAD_ENABLE);
 }
 
-void bbTIM_DMACmd(TMR_TypeDef* TMRx, uint16_t TIM_DMASource, FunctionalState NewState)
+void bbTIM_DMACmd(void *TMRx, uint16_t TIM_DMASource, FunctionalState NewState)
 {
     if (NewState == ENABLE) {
-        SET_BIT(TMRx->DIEN, TIM_DMASource);
+        SET_BIT(((TMR_TypeDef *)TMRx)->DIEN, TIM_DMASource);
     } else {
-        CLEAR_BIT(TMRx->DIEN, TIM_DMASource);
+        CLEAR_BIT(((TMR_TypeDef *)TMRx)->DIEN, TIM_DMASource);
     }
 }
 

@@ -51,7 +51,9 @@
 #include "drivers/bus_quadspi.h"
 #include "drivers/bus_spi.h"
 #include "drivers/buttons.h"
-#include "drivers/camera_control_impl.h"
+#include "drivers/can/can.h"
+#include "drivers/can/can_impl.h"
+#include "drivers/camera_control.h"
 #include "drivers/compass/compass.h"
 #include "drivers/dma.h"
 #include "drivers/dshot.h"
@@ -96,6 +98,9 @@
 #include "flight/alt_hold.h"
 #include "flight/autopilot.h"
 #include "flight/failsafe.h"
+#if ENABLE_FLIGHT_PLAN
+#include "flight/flight_plan_nav.h"
+#endif
 #include "flight/imu.h"
 #include "flight/mixer.h"
 #include "flight/gps_rescue.h"
@@ -108,9 +113,11 @@
 #include "io/asyncfatfs/asyncfatfs.h"
 #include "io/beeper.h"
 #include "io/dashboard.h"
+#include "io/displayport_fb_osd.h"
 #include "io/displayport_frsky_osd.h"
 #include "io/displayport_max7456.h"
 #include "io/displayport_msp.h"
+#include "io/dronecan/dronecan.h"
 #include "io/flashfs.h"
 #include "io/gimbal.h"
 #include "io/gimbal_control.h"
@@ -137,6 +144,9 @@
 #include "msp/msp_serial.h"
 
 #include "osd/osd.h"
+#if ENABLE_OSD_CUSTOM_TEXT
+#include "osd/osd_custom_text.h"
+#endif
 
 #include "pg/adc.h"
 #include "pg/beeper.h"
@@ -144,6 +154,7 @@
 #include "pg/bus_i2c.h"
 #include "pg/bus_spi.h"
 #include "pg/bus_quadspi.h"
+#include "pg/can.h"
 #include "pg/flash.h"
 #include "pg/mco.h"
 #include "pg/motor.h"
@@ -184,6 +195,13 @@ void targetPreInit(void);
 #endif
 
 uint8_t systemState = SYSTEM_STATE_INITIALISING;
+
+static enum {
+    FLASH_INIT_ATTEMPTED                = (1 << 0),
+    SD_INIT_ATTEMPTED                   = (1 << 1),
+    SPI_BUSSES_INIT_ATTEMPTED           = (1 << 2),
+    QUAD_OCTO_SPI_BUSSES_INIT_ATTEMPTED = (1 << 3),
+} initFlags = 0;
 
 #ifdef BUS_SWITCH_PIN
 void busSwitchInit(void)
@@ -254,6 +272,19 @@ static void configureOctoSPIBusses(void)
 #endif
 }
 
+#if ENABLE_CAN
+static void configureCANBusses(void)
+{
+    canPinConfigure(canPinConfig(0));
+    const uint32_t bitrate = (uint32_t)canConfig()->bitrate_khz * 1000U;
+    // Try every CAN device the platform advertises.  canInit() returns
+    // false for absent / unconfigured devices; that is harmless.
+    for (int dev = 0; dev < CANDEV_COUNT; dev++) {
+        canInit((canDevice_e)dev, bitrate);
+    }
+}
+#endif
+
 #ifdef USE_SDCARD
 static void sdCardAndFSInit(void)
 {
@@ -262,14 +293,8 @@ static void sdCardAndFSInit(void)
 }
 #endif
 
-void init(void)
+void initPhase1(void)
 {
-#if SERIAL_PORT_COUNT > 0
-    printfSerialInit();
-#endif
-
-    systemInit();
-
     // Initialize task data as soon as possible. Has to be done before tasksInit(),
     // and any init code that may try to modify task behaviour before tasksInit().
     tasksInitData();
@@ -285,14 +310,6 @@ void init(void)
 #if defined(USE_CONFIG_TARGET_PREINIT)
     configTargetPreInit();
 #endif
-
-    enum {
-        FLASH_INIT_ATTEMPTED                = (1 << 0),
-        SD_INIT_ATTEMPTED                   = (1 << 1),
-        SPI_BUSSES_INIT_ATTEMPTED           = (1 << 2),
-        QUAD_OCTO_SPI_BUSSES_INIT_ATTEMPTED = (1 << 3),
-    };
-    uint8_t initFlags = 0;
 
 #ifdef CONFIG_IN_SDCARD
 
@@ -399,13 +416,16 @@ void init(void)
 #endif
 
     if (!readSuccess || !isEEPROMVersionValid() || strncasecmp(systemConfig()->boardIdentifier, TARGET_BOARD_IDENTIFIER, sizeof(TARGET_BOARD_IDENTIFIER))) {
-        resetEEPROM();
+        resetEEPROMOnLoadFault();
     }
 
     systemState |= SYSTEM_STATE_CONFIG_LOADED;
 
 #ifdef USE_DEBUG_PIN
     dbgPinInit();
+#endif
+#ifdef USE_PINIO
+    pinioInit(pinioConfig());
 #endif
 
     debugMode = systemConfig()->debug_mode;
@@ -419,10 +439,11 @@ void init(void)
 #endif
     LED2_ON;
 
-#if !defined(SIMULATOR_BUILD)
     EXTIInit();
-#endif
+}
 
+void initPhase2(void)
+{
 #if defined(USE_BUTTONS)
 
     buttonsInit();
@@ -445,7 +466,7 @@ void init(void)
             bothButtonsHeld = buttonAPressed() && buttonBPressed();
             if (bothButtonsHeld) {
                 if (--secondsRemaining == 0) {
-                    resetEEPROM();
+                    resetEEPROM(CONFIG_RESET_BUTTON, 0);
 #ifdef USE_PERSISTENT_OBJECTS
                     persistentObjectWrite(PERSISTENT_OBJECT_RESET_REASON, RESET_NONE);
 #endif
@@ -488,7 +509,29 @@ void init(void)
 #endif
 
 #ifdef USE_OVERCLOCK
-    OverclockRebootIfNecessary(systemConfig()->cpu_overclock);
+    {
+        static const uint16_t overclockMhzTable[] = {
+            0, // OFF (use default clock)
+#if ENABLE_OVERCLOCK_108_MHZ
+            108,
+#endif
+#if ENABLE_OVERCLOCK_120_MHZ
+            120,
+#endif
+#if ENABLE_OVERCLOCK_192_MHZ
+            192,
+#endif
+#if ENABLE_OVERCLOCK_216_MHZ
+            216,
+#endif
+#if ENABLE_OVERCLOCK_240_MHZ
+            240,
+#endif
+        };
+        const uint8_t idx = systemConfig()->cpu_overclock;
+        const uint16_t mhz = (idx < ARRAYLEN(overclockMhzTable)) ? overclockMhzTable[idx] : 0;
+        OverclockRebootIfNecessary(mhz);
+    }
 #endif
 
     // Configure MCO output after config is stable
@@ -504,7 +547,7 @@ void init(void)
     busSwitchInit();
 #endif
 
-#if defined(USE_UART) && !defined(SIMULATOR_BUILD)
+#if defined(USE_UART) && SERIAL_TRAIT_PIN_CONFIG
     uartPinConfigure(serialPinConfig());
 #endif
 
@@ -540,7 +583,7 @@ void init(void)
     beeperInit(beeperDevConfig());
 #endif
 /* temp until PGs are implemented. */
-#if defined(USE_INVERTER) && !defined(SIMULATOR_BUILD)
+#if defined(USE_INVERTER)
     initInverters(serialPinConfig());
 #endif
 
@@ -561,49 +604,57 @@ void init(void)
         initFlags |= QUAD_OCTO_SPI_BUSSES_INIT_ATTEMPTED;
     }
 
-#if defined(USE_SDCARD_SDIO) && !defined(CONFIG_IN_SDCARD) && PLATFORM_TRAIT_SDIO_INIT
+#if ENABLE_SDIO_INIT && defined(USE_SDCARD_SDIO) && !defined(CONFIG_IN_SDCARD)
     sdioPinConfigure();
-    SDIO_GPIO_Init();
+    sdioInitialize();
 #endif
+}
 
 #ifdef USE_USB_MSC
+bool checkMsc(void)
+{
+    return (mscCheckBootAndReset() || mscCheckButton());
+}
+
+void initMsc(void)
+{
 /* MSC mode will start after init, but will not allow scheduler to run,
  *  so there is no bottleneck in reading and writing data */
-    mscInit();
-    if (mscCheckBootAndReset() || mscCheckButton()) {
-        ledInit(statusLedConfig());
+    ledInit(statusLedConfig());
 
 #ifdef USE_SDCARD
-        if (blackboxConfig()->device == BLACKBOX_DEVICE_SDCARD) {
-            if (sdcardConfig()->mode) {
-                if (!(initFlags & SD_INIT_ATTEMPTED)) {
-                    sdCardAndFSInit();
-                    initFlags |= SD_INIT_ATTEMPTED;
-                }
+    if (blackboxConfig()->device == BLACKBOX_DEVICE_SDCARD) {
+        if (sdcardConfig()->mode) {
+            if (!(initFlags & SD_INIT_ATTEMPTED)) {
+                sdCardAndFSInit();
+                initFlags |= SD_INIT_ATTEMPTED;
             }
-        }
-#endif
-
-#if defined(USE_FLASHFS)
-        // If the blackbox device is onboard flash, then initialize and scan
-        // it to identify the log files *before* starting the USB device to
-        // prevent timeouts of the mass storage device.
-        if (blackboxConfig()->device == BLACKBOX_DEVICE_FLASH) {
-            emfat_init_files();
-        }
-#endif
-        // There's no more initialisation to be done, so enable DMA where possible for SPI
-#ifdef USE_SPI
-        spiInitBusDMA();
-#endif
-        if (mscStart() == 0) {
-             mscWaitForButton();
-        } else {
-            systemResetFromMsc();
         }
     }
 #endif
 
+#if defined(USE_FLASHFS)
+    // If the blackbox device is onboard flash, then initialize and scan
+    // it to identify the log files *before* starting the USB device to
+    // prevent timeouts of the mass storage device.
+    if (blackboxConfig()->device == BLACKBOX_DEVICE_FLASH) {
+        emfat_init_files();
+    }
+#endif
+    // There's no more initialisation to be done, so enable DMA where possible for SPI
+#ifdef USE_SPI
+    spiInitBusDMA();
+#endif
+    if (mscStart() == 0) {
+        mscWaitForButton();
+    } else {
+        systemResetFromMsc();
+    }
+}
+#endif
+
+void initPhase3(void)
+{
 #ifdef USE_PERSISTENT_MSC_RTC
     // if we didn't enter MSC mode then clear the persistent RTC value
     persistentObjectWrite(PERSISTENT_OBJECT_RTC_HIGH, 0);
@@ -634,6 +685,14 @@ void init(void)
 #endif // USE_I2C
 
 #endif // TARGET_BUS_INIT
+
+#if ENABLE_CAN && !defined(TARGET_BUS_INIT)
+    configureCANBusses();
+#endif
+
+#if ENABLE_DRONECAN
+    dronecanInit();
+#endif
 
 #ifdef USE_HARDWARE_REVISION_DETECTION
     updateHardwareRevision();
@@ -697,9 +756,6 @@ void init(void)
     servosFilterInit();
 #endif
 
-#ifdef USE_PINIO
-    pinioInit(pinioConfig());
-#endif
 
 #ifdef USE_PIN_PULL_UP_DOWN
     pinPullupPulldownInit();
@@ -708,6 +764,7 @@ void init(void)
 #ifdef USE_PINIOBOX
     pinioBoxInit(pinioBoxConfig());
 #endif
+
 
     LED1_ON;
     LED0_OFF;
@@ -718,7 +775,11 @@ void init(void)
         LED0_TOGGLE;
 #if defined(USE_BEEPER)
         delay(25);
-        if (!(beeperConfig()->beeper_off_flags & BEEPER_GET_FLAG(BEEPER_SYSTEM_INIT))) {
+        // This boot beep bypasses beeper()/beeperUsbSuppressed(), so honour BEEPER_USB
+        // here directly. MSP is not up yet, but usbCableIsInserted() is already valid.
+        const bool usbSuppressed = (beeperConfig()->beeper_off_flags & BEEPER_GET_FLAG(BEEPER_USB))
+            && usbCableIsInserted();
+        if (!(beeperConfig()->beeper_off_flags & BEEPER_GET_FLAG(BEEPER_SYSTEM_INIT)) && !usbSuppressed) {
             BEEP_ON;
         }
         delay(25);
@@ -730,6 +791,7 @@ void init(void)
 
     LED0_OFF;
     LED1_OFF;
+
 
     imuInit();
 
@@ -744,6 +806,10 @@ void init(void)
         gpsLapTimerInit();
 #endif // USE_GPS_LAP_TIMER
     }
+#endif
+
+#if ENABLE_OSD_CUSTOM_TEXT
+    osdCustomTextInit();
 #endif
 
 #ifdef USE_LED_STRIP
@@ -806,6 +872,9 @@ void init(void)
 
     positionInit();
     autopilotInit();
+#if ENABLE_FLIGHT_PLAN
+    flightPlanNavInit();
+#endif
 
 #if defined(USE_VTX_COMMON) || defined(USE_VTX_CONTROL)
     vtxTableInit();
@@ -909,6 +978,15 @@ void init(void)
             FALLTHROUGH;
 #endif
 
+#if ENABLE_FB_OSD
+        case OSD_DISPLAYPORT_DEVICE_FBOSD:
+            if (fbOsdDisplayPortInit(vcdProfile(), &osdDisplayPort) || device == OSD_DISPLAYPORT_DEVICE_FBOSD) {
+                osdDisplayPortDevice = OSD_DISPLAYPORT_DEVICE_FBOSD;
+                break;
+            }
+            FALLTHROUGH;
+#endif
+
 #if defined(USE_CMS) && defined(USE_MSP_DISPLAYPORT) && defined(USE_OSD_OVER_MSP_DISPLAYPORT)
         case OSD_DISPLAYPORT_DEVICE_MSP:
             osdDisplayPort = displayPortMspInit();
@@ -998,7 +1076,9 @@ void init(void)
 
     debugInit();
 
+#if ENABLE_UNUSED_PINS_INIT
     unusedPinsInit();
+#endif
 
     tasksInit();
 

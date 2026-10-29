@@ -32,6 +32,7 @@ typedef enum {
     MOTOR_PROTOCOL_FAMILY_UNKNOWN = 0,
     MOTOR_PROTOCOL_FAMILY_PWM,
     MOTOR_PROTOCOL_FAMILY_DSHOT,
+    MOTOR_PROTOCOL_FAMILY_CAN,
 } motorProtocolFamily_e;
 
 typedef enum {
@@ -46,8 +47,23 @@ typedef enum {
 /*  MOTOR_PROTOCOL_DSHOT1200, removed */
     MOTOR_PROTOCOL_PROSHOT1000,
     MOTOR_PROTOCOL_DISABLED,
+    // Appended after DISABLED so existing stored motor_pwm_protocol values keep
+    // their meaning across a config upgrade.
+    MOTOR_PROTOCOL_DRONECAN,
     MOTOR_PROTOCOL_MAX
 } motorProtocolTypes_e;
+
+// Legacy aliases kept for backward compatibility with older PWM_TYPE_* names
+#define PWM_TYPE_PWM              MOTOR_PROTOCOL_PWM
+#define PWM_TYPE_ONESHOT125       MOTOR_PROTOCOL_ONESHOT125
+#define PWM_TYPE_ONESHOT42        MOTOR_PROTOCOL_ONESHOT42
+#define PWM_TYPE_MULTISHOT        MOTOR_PROTOCOL_MULTISHOT
+#define PWM_TYPE_BRUSHED          MOTOR_PROTOCOL_BRUSHED
+#define PWM_TYPE_DSHOT150         MOTOR_PROTOCOL_DSHOT150
+#define PWM_TYPE_DSHOT300         MOTOR_PROTOCOL_DSHOT300
+#define PWM_TYPE_DSHOT600         MOTOR_PROTOCOL_DSHOT600
+#define PWM_TYPE_PROSHOT1000      MOTOR_PROTOCOL_PROSHOT1000
+#define PWM_TYPE_DISABLED         MOTOR_PROTOCOL_DISABLED
 
 typedef struct motorVTable_s {
     // Common
@@ -66,6 +82,8 @@ typedef struct motorVTable_s {
     void (*shutdown)(void);
     bool (*isMotorIdle)(unsigned index);
     IO_t (*getMotorIO)(unsigned index);
+    void (*releaseMotorIO)(unsigned index);
+    bool (*reinstateMotorIO)(unsigned index);
 
     // Digital commands
     void (*requestTelemetry)(unsigned index);

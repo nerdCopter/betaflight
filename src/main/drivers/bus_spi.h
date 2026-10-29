@@ -23,8 +23,8 @@
 #include "platform.h"
 
 #include "drivers/bus.h"
+#include "drivers/bus_spi_types.h"
 #include "drivers/io_types.h"
-#include "drivers/bus.h"
 
 #include "pg/pg.h"
 #include "pg/pg_ids.h"
@@ -44,7 +44,7 @@ typedef enum {
     SPI_MODE3_POL_HIGH_EDGE_2ND
 } SPIMode_e;
 
-typedef enum SPIDevice {
+typedef enum {
     SPIINVALID = -1,
     SPIDEV_FIRST = 0,
 #if defined(USE_SPI_DEVICE_0)
@@ -57,21 +57,22 @@ typedef enum SPIDevice {
     SPIDEV_3,
     SPIDEV_4,
     SPIDEV_5,
-    SPIDEV_6
-} SPIDevice;
+    SPIDEV_6,
+    SPIDEV_7
+} spiDevice_e;
 
-// Macros to convert between CLI bus number and SPIDevice.
+// Macros to convert between CLI bus number and spiDevice_e.
 #define SPI_CFG_TO_DEV(x)   ((x) - 1)
 #define SPI_DEV_TO_CFG(x)   ((x) + 1)
 
 void spiPreinit(void);
-bool spiInit(SPIDevice device);
+bool spiInit(spiDevice_e device);
 
 // Called after all devices are initialised to enable SPI DMA where streams are available.
 void spiInitBusDMA(void);
 
-SPIDevice spiDeviceByInstance(const SPI_TypeDef *instance);
-SPI_TypeDef *spiInstanceByDevice(SPIDevice device);
+spiDevice_e spiDeviceByInstance(const spiResource_t *instance);
+spiResource_t *spiInstanceByDevice(spiDevice_e device);
 
 // BusDevice API
 
@@ -96,6 +97,8 @@ void spiWait(const extDevice_t *dev);
 void spiRelease(const extDevice_t *dev);
 // Return true if DMA engine is busy
 bool spiIsBusy(const extDevice_t *dev);
+// Abandon the DMA transfer in progress for this device, then start any transfer queued behind it
+void spiAbortTransfer(const extDevice_t *dev);
 
 // Link two segment lists
 void spiLinkSegments(const extDevice_t *dev, busSegment_t *firstSegment, busSegment_t *secondSegment);
@@ -139,6 +142,7 @@ bool spiUseDMA(const extDevice_t *dev);
 bool spiUseSDO_DMA(const extDevice_t *dev);
 void spiBusDeviceRegister(const extDevice_t *dev);
 uint8_t spiGetRegisteredDeviceCount(void);
+uint16_t spiGetErrorCounter(void);
 uint8_t spiGetExtDeviceCount(const extDevice_t *dev);
 
 // Common code to process linked segments, to be called from spiSequenceStart.

@@ -18,7 +18,6 @@
  * If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <ctype.h>
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,6 +39,7 @@
 
 #include "drivers/light_led.h"
 #include "drivers/time.h"
+#include "drivers/system.h"
 
 #include "io/beeper.h"
 #ifdef USE_DASHBOARD
@@ -48,6 +48,10 @@
 
 #include "io/gps.h"
 #include "io/gps_virtual.h"
+
+#if ENABLE_DRONECAN
+#include "io/dronecan/dronecan_gnss.h"
+#endif
 
 #include "io/serial.h"
 
@@ -90,14 +94,18 @@ GPS_svinfo_t GPS_svinfo[GPS_SV_MAXSATS_M8N];
 #define GPS_CONFIG_BAUD_CHANGE_INTERVAL 330  // Time to wait, in ms, between 'test this baud rate' messages
 #define GPS_CONFIG_CHANGE_INTERVAL 110       // Time to wait, in ms, between CONFIG steps
 #define GPS_BAUDRATE_TEST_COUNT 3      // Number of times to repeat the test message when setting baudrate
-#define GPS_RECV_TIME_MAX 25           // Max permitted time, in us, for the Receive Data process
+// bound the baud scan - each step re-inits the UART, and a port with no module never stops (#13946)
+#define GPS_BAUD_SWEEP_CYCLE_LIMIT 2    // in whole passes, so the backoff always starts on the configured baud rate
+#define GPS_BAUD_SWEEP_BACKOFF_MS 30000
+#define GPS_RECV_TIME_MAX 25           // Max permitted time, in us, for the NMEA Receive Data process
+#define GPS_UBLOX_RECV_TIME_MAX 15     // Max permitted time, in us, for the UBLOX Receive Data process
+#define GPS_FRAME_PROCESS_TIME_US 10    // Estimated ceiling for time required to process a frame, in us, for the Receive Data process
 // Decay the estimated max task duration by 1/(1 << GPS_TASK_DECAY_SHIFT) on every invocation
 #define GPS_TASK_DECAY_SHIFT 9         // Smoothing factor for GPS task re-scheduler
 
 static serialPort_t *gpsPort;
 static float gpsDataIntervalSeconds = 0.1f;
 static float gpsDataFrequencyHz = 10.0f;
-
 static uint16_t currentGpsStamp = 0; // logical timer for received position update
 
 typedef struct gpsInitData_s {
@@ -116,6 +124,7 @@ static const gpsInitData_t gpsInitData[] = {
 };
 
 #define DEFAULT_BAUD_RATE_INDEX 0
+#define GPS_BAUD_SWEEP_STEP_LIMIT (GPS_BAUD_SWEEP_CYCLE_LIMIT * ARRAYLEN(gpsInitData))
 
 #ifdef USE_GPS_UBLOX
 #define MAX_VALSET_SIZE 128
@@ -329,23 +338,23 @@ typedef enum {
     UBLOX_MSG_GSA,          //  7. GSA: GNSS DOP and Active Satellites
     UBLOX_MSG_RMC,          //  8. RMC: Recommended Minimum data
     UBLOX_ACQUIRE_MODEL,    //  9
-//    UBLOX_CFG_ANA,          //  . ANA: if M10, enable autonomous mode : temporarily disabled.
-    UBLOX_SET_SBAS,         // 10. Sets SBAS
-    UBLOX_SET_PMS,          // 11. Sets Power Mode
-    UBLOX_MSG_NAV_PVT,      // 12. set NAV-PVT rate
-    UBLOX_MSG_SOL,          // 13. set SOL MSG rate
-    UBLOX_MSG_POSLLH,       // 14. set POSLLH MSG rate
-    UBLOX_MSG_STATUS,       // 15: set STATUS MSG rate
-    UBLOX_MSG_VELNED,       // 16. set VELNED MSG rate
-    UBLOX_MSG_DOP,          // 17. MSG_NAV_DOP
-    UBLOX_SAT_INFO,         // 18. MSG_NAV_SAT message
-    UBLOX_SET_NAV_RATE,     // 19. set to user requested GPS sample rate
-    UBLOX_MSG_CFG_GNSS,     // 20. For not SBAS or GALILEO
-    UBLOX_CONFIG_COMPLETE   // 21. Config finished, start receiving data
+    UBLOX_CFG_ANA,          // 10  ANA: if M7 or above, enable autonomous mode
+    UBLOX_SET_SBAS,         // 11. Sets SBAS
+    UBLOX_SET_PMS,          // 12. Sets Power Mode
+    UBLOX_MSG_NAV_PVT,      // 13. set NAV-PVT rate
+    UBLOX_MSG_SOL,          // 14. set SOL MSG rate
+    UBLOX_MSG_POSLLH,       // 15. set POSLLH MSG rate
+    UBLOX_MSG_STATUS,       // 16: set STATUS MSG rate
+    UBLOX_MSG_VELNED,       // 17. set VELNED MSG rate
+    UBLOX_MSG_DOP,          // 18. MSG_NAV_DOP
+    UBLOX_SAT_INFO,         // 19. MSG_NAV_SAT message
+    UBLOX_SET_NAV_RATE,     // 20. set to user requested GPS sample rate
+    UBLOX_MSG_CFG_GNSS,     // 21. For not SBAS or GALILEO
+    UBLOX_CONFIG_COMPLETE   // 22. Config finished, start receiving data
 } ubloxStatePosition_e;
 
-baudRate_e initBaudRateIndex;
-size_t initBaudRateCycleCount;
+static size_t initBaudRateCycleCount;
+static uint32_t lastBaudStepMs;
 #endif // USE_GPS_UBLOX
 
 gpsData_t gpsData;
@@ -372,7 +381,8 @@ static void logErrorToPacketLog(void)
 }
 #endif  // USE_DASHBOARD
 
-static void gpsNewData(uint16_t c);
+static void gpsNewData(uint8_t c);
+static void gpsHandleFrameComplete(void);
 #ifdef USE_GPS_NMEA
 static bool gpsNewFrameNMEA(char c);
 #endif
@@ -388,6 +398,14 @@ static void gpsSetState(gpsState_e state)
     gpsData.state_position = 0;
     gpsData.state_ts = gpsData.now;
     gpsData.ackState = UBLOX_ACK_IDLE;
+}
+
+// skip the USART and DMA teardown in uartReconfigure() when the port is already at this rate (#13946)
+static void gpsSetBaudRate(uint32_t baudRate)
+{
+    if (serialGetBaudRate(gpsPort) != baudRate) {
+        serialSetBaudRate(gpsPort, baudRate);
+    }
 }
 
 void gpsInit(void)
@@ -410,22 +428,24 @@ void gpsInit(void)
     // init gpsData structure. if we're not actually enabled, don't bother doing anything else
     gpsSetState(GPS_STATE_UNKNOWN);
 
-    if (gpsConfig()->provider == GPS_MSP || gpsConfig()->provider == GPS_VIRTUAL) { // no serial ports used when GPS_MSP or GPS_VIRTUAL is configured
+    // MSP / virtual / DroneCAN providers don't own a serial port — the
+    // frame source is another subsystem feeding gpsSol through updateXxxGPS().
+    if (GPS_PROVIDER_REQUIRES_NO_SERIAL_PORT(gpsConfig()->provider)) {
         gpsSetState(GPS_STATE_INITIALIZED);
         return;
     }
 
-    const serialPortConfig_t *gpsPortConfig = findSerialPortConfig(FUNCTION_GPS);
-    if (!gpsPortConfig) {
+    const serialPortIdentifier_e port = gpsConfig()->gps_uart;
+    if (port == SERIAL_PORT_NONE) {
         return;
     }
 
     // set the user's intended baud rate
-    initBaudRateIndex = BAUD_COUNT;
     initBaudRateCycleCount = 0;
+    lastBaudStepMs = millis();
     gpsData.userBaudRateIndex = DEFAULT_BAUD_RATE_INDEX;
     for (unsigned i = 0; i < ARRAYLEN(gpsInitData); i++) {
-        if (gpsInitData[i].baudrateIndex == gpsPortConfig->gps_baudrateIndex) {
+        if (gpsInitData[i].baudrateIndex == gpsConfig()->gps_baud) {
             gpsData.userBaudRateIndex = i;
             break;
         }
@@ -441,16 +461,16 @@ void gpsInit(void)
         mode &= ~MODE_TX;
     }
 #endif
-    if (serialType(gpsPortConfig->identifier) == SERIALTYPE_UART
-        || serialType(gpsPortConfig->identifier) == SERIALTYPE_LPUART) {
-        // TODO: SERIAL_CHECK_TX is broken on F7, disable it until it is fixed
-#if !defined(STM32F7) || defined(USE_F7_CHECK_TX)
+    if (serialType(port) == SERIALTYPE_UART
+        || serialType(port) == SERIALTYPE_LPUART
+        || serialType(port) == SERIALTYPE_PIOUART) {
+#if !ENABLE_SERIAL_SKIP_CHECK_TX
         options |= SERIAL_CHECK_TX;
 #endif
     }
 
     // no callback - buffer will be consumed in gpsUpdate()
-    gpsPort = openSerialPort(gpsPortConfig->identifier, FUNCTION_GPS, NULL, NULL, baudRates[gpsInitData[gpsData.userBaudRateIndex].baudrateIndex], mode, options);
+    gpsPort = openSerialPort(port, FUNCTION_GPS, NULL, NULL, baudRates[gpsInitData[gpsData.userBaudRateIndex].baudrateIndex], mode, options);
     if (!gpsPort) {
         return;
     }
@@ -515,29 +535,6 @@ static uint8_t ubloxAddValSet(ubxMessage_t * tx_buffer, ubxValGetSetBytes_e key,
 
     return 4 + len;
 }
-
-// the following lines are not being used, because we are not currently sending ubloxValGet messages
-#if 0
-static size_t ubloxAddValGet(ubxMessage_t * tx_buffer, ubxValGetSetBytes_e key, size_t offset) {
-    const uint8_t zeroes[8] = {0};
-
-    return ubloxAddValSet(tx_buffer, key, zeroes, offset);
-}
-
-static size_t ubloxValGet(ubxMessage_t * tx_buffer, ubxValGetSetBytes_e key, ubloxValLayer_e layer)
-{
-    tx_buffer->header.preamble1 = PREAMBLE1;
-    tx_buffer->header.preamble2 = PREAMBLE2;
-    tx_buffer->header.msg_class = CLASS_CFG;
-    tx_buffer->header.msg_id = MSG_CFG_VALGET;
-
-    tx_buffer->payload.cfg_valget.version = 1;
-    tx_buffer->payload.cfg_valget.layer = layer;
-    tx_buffer->payload.cfg_valget.position = 0;
-
-    return ubloxAddValGet(tx_buffer, key, 0);
-}
-#endif // not used
 
 static uint8_t ubloxValSet(ubxMessage_t * tx_buffer, ubxValGetSetBytes_e key, uint8_t * payload, ubloxValLayer_e layer)
 {
@@ -619,7 +616,7 @@ static void ubloxSendPollMessage(uint8_t msg_id)
 
 static void ubloxSendNAV5Message(uint8_t model)
 {
-    DEBUG_SET(DEBUG_GPS_CONNECTION, 0, model);
+    DEBUG_SET(DEBUG_GPS_CONNECTION, 0, model);  //!< GPS Model
     ubxMessage_t tx_buffer;
     if (gpsData.ubloxM9orAbove) {
         uint8_t payload[4];
@@ -706,40 +703,21 @@ static void ubloxSendNAV5Message(uint8_t model)
     }
 }
 
-// *** Assist Now Autonomous temporarily disabled until a subsequent PR either includes, or removes it ***
-// static void ubloxSendNavX5Message(void) {
-//     ubxMessage_t tx_buffer;
-//
-//     if (gpsData.ubloxM9orAbove) {
-//         uint8_t payload[1];
-//         payload[0] = 1;
-//         size_t offset = ubloxValSet(&tx_buffer, CFG_ANA_USE_ANA, payload, UBX_VAL_LAYER_RAM); // 5
-//
-//         ubloxSendConfigMessage(&tx_buffer, MSG_CFG_VALSET, offsetof(ubxCfgValSet_t, cfgData) + offset, true);
-//     } else {
-//         memset(&tx_buffer, 0, sizeof(ubxMessage_t));
-//
-//         tx_buffer.payload.cfg_nav5x.version = 0x0002;
-//
-//         tx_buffer.payload.cfg_nav5x.mask1 = 0x4000;
-//         tx_buffer.payload.cfg_nav5x.mask2 = 0x0;
-//         tx_buffer.payload.cfg_nav5x.minSVs = 0;
-//         tx_buffer.payload.cfg_nav5x.maxSVs = 0;
-//         tx_buffer.payload.cfg_nav5x.minCNO = 0;
-//         tx_buffer.payload.cfg_nav5x.reserved1 = 0;
-//         tx_buffer.payload.cfg_nav5x.iniFix3D = 0;
-//         tx_buffer.payload.cfg_nav5x.ackAiding = 0;
-//         tx_buffer.payload.cfg_nav5x.wknRollover = 0;
-//         tx_buffer.payload.cfg_nav5x.sigAttenCompMode = 0;
-//         tx_buffer.payload.cfg_nav5x.usePPP = 0;
-//
-//         tx_buffer.payload.cfg_nav5x.aopCfg = 0x1; //bit 0 = useAOP
-//
-//         tx_buffer.payload.cfg_nav5x.useAdr = 0;
-//
-//         ubloxSendConfigMessage(&tx_buffer, MSG_CFG_NAVX_SETTINGS, sizeof(ubxCfgNav5x_t), false);
-//     }
-// }
+static void ubloxAssistNowAutonomous(void) {
+    ubxMessage_t tx_buffer;
+    if (gpsData.ubloxM9orAbove) {
+        uint8_t payload[1];
+        payload[0] = 1;
+        size_t offset = ubloxValSet(&tx_buffer, CFG_ANA_USE_ANA, payload, UBX_VAL_LAYER_RAM); // 5
+        ubloxSendConfigMessage(&tx_buffer, MSG_CFG_VALSET, offsetof(ubxCfgValSet_t, cfgData) + offset, true);
+    } else {
+        memset(&tx_buffer, 0, sizeof(ubxMessage_t));
+        tx_buffer.payload.cfg_nav5x.version = 0x0002;
+        tx_buffer.payload.cfg_nav5x.mask1 = 0x4000;
+        tx_buffer.payload.cfg_nav5x.aopCfg = 0x1; //bit 0 = useAOP
+        ubloxSendConfigMessage(&tx_buffer, MSG_CFG_NAVX_SETTINGS, sizeof(ubxCfgNav5x_t), false);
+    }
+}
 
 static void ubloxSetPowerModeValSet(uint8_t powerSetupValue)
 {
@@ -968,7 +946,7 @@ static void gpsConfigureNmea(void)
     // - send any NMEA custom commands to the GPS Module
     // the user must configure the power-up baud rate of the module to be fast enough for their data rate
     // Note: we always parse all incoming NMEA messages
-    DEBUG_SET(DEBUG_GPS_CONNECTION, 4, (gpsData.state * 100 + gpsData.state_position));
+    DEBUG_SET(DEBUG_GPS_CONNECTION, 4, (gpsData.state * 100 + gpsData.state_position));  //!< State And State Position
 
     // wait 500ms between changes
     if (cmp32(gpsData.now, gpsData.state_ts) < 500) {
@@ -992,7 +970,7 @@ static void gpsConfigureNmea(void)
 #if !defined(GPS_NMEA_TX_ONLY)
         if (gpsData.state_position < 1) {
             // set the FC's baud rate to the user's configured baud rate
-            serialSetBaudRate(gpsPort, baudRates[gpsInitData[gpsData.userBaudRateIndex].baudrateIndex]);
+            gpsSetBaudRate(baudRates[gpsInitData[gpsData.userBaudRateIndex].baudrateIndex]);
             gpsData.state_position++;
         } else if (gpsData.state_position < 2) {
             // send NMEA custom commands to select which messages being sent, data rate etc
@@ -1045,7 +1023,7 @@ static void gpsConfigureUblox(void)
     switch (gpsData.state) {
     case GPS_STATE_DETECT_BAUD:
 
-        DEBUG_SET(DEBUG_GPS_CONNECTION, 3, baudRates[gpsInitData[gpsData.tempBaudRateIndex].baudrateIndex] / 100);
+        DEBUG_SET(DEBUG_GPS_CONNECTION, 3, baudRates[gpsInitData[gpsData.tempBaudRateIndex].baudrateIndex] / 100);  //!< Baud Rate / 100, Else Nav Message Age In Milliseconds
 
         // check to see if there has been a response to the version command
         // initially the FC will be at the user-configured baud rate.
@@ -1054,6 +1032,8 @@ static void gpsConfigureUblox(void)
             serialPrint(gpsPort, gpsInitData[gpsData.userBaudRateIndex].ubx);
             // use this baud rate for re-connections
             gpsData.tempBaudRateIndex = gpsData.userBaudRateIndex;
+            // the link is proven, so a later dropout gets the full-speed sweep again
+            initBaudRateCycleCount = 0;
             // we're done here, let's move the the next state
             gpsSetState(GPS_STATE_CHANGE_BAUD);
             return;
@@ -1062,7 +1042,7 @@ static void gpsConfigureUblox(void)
         // Send MON-VER messages at GPS_CONFIG_BAUD_CHANGE_INTERVAL for GPS_BAUDRATE_TEST_COUNT times
         static bool messageSent = false;
         static uint8_t messageCounter = 0;
-        DEBUG_SET(DEBUG_GPS_CONNECTION, 2, initBaudRateCycleCount * 100 + messageCounter);
+        DEBUG_SET(DEBUG_GPS_CONNECTION, 2, initBaudRateCycleCount * 100 + messageCounter);  //!< Baud Detect Progress, Else Nav Message Age In Milliseconds
 
         if (messageCounter < GPS_BAUDRATE_TEST_COUNT) {
             if (!messageSent) {
@@ -1081,6 +1061,13 @@ static void gpsConfigureUblox(void)
         messageCounter = 0;
         gpsData.state_ts = gpsData.now;
 
+        // let the opening passes run unthrottled, then stop re-initialising the UART every step
+        if ((initBaudRateCycleCount >= GPS_BAUD_SWEEP_STEP_LIMIT)
+            && (cmp32(gpsData.now, lastBaudStepMs) < GPS_BAUD_SWEEP_BACKOFF_MS)) {
+            break;
+        }
+        lastBaudStepMs = gpsData.now;
+
         // failed to connect at that rate after five attempts
         // try other GPS baudrates, starting at 9600 and moving up
         if (gpsData.tempBaudRateIndex == 0) {
@@ -1089,8 +1076,9 @@ static void gpsConfigureUblox(void)
             gpsData.tempBaudRateIndex--;
         }
         // set the FC baud rate to the new temp baud rate
-        serialSetBaudRate(gpsPort, baudRates[gpsInitData[gpsData.tempBaudRateIndex].baudrateIndex]);
-        initBaudRateCycleCount++;
+        gpsSetBaudRate(baudRates[gpsInitData[gpsData.tempBaudRateIndex].baudrateIndex]);
+        // stop counting once backed off, so debug[2] can't overflow
+        initBaudRateCycleCount = MIN(initBaudRateCycleCount + 1, GPS_BAUD_SWEEP_STEP_LIMIT);
 
         break;
 
@@ -1102,8 +1090,8 @@ static void gpsConfigureUblox(void)
             return;
         }
         // set the FC's serial port to the configured rate
-        serialSetBaudRate(gpsPort, baudRates[gpsInitData[gpsData.userBaudRateIndex].baudrateIndex]);
-        DEBUG_SET(DEBUG_GPS_CONNECTION, 3, baudRates[gpsInitData[gpsData.userBaudRateIndex].baudrateIndex] / 100);
+        gpsSetBaudRate(baudRates[gpsInitData[gpsData.userBaudRateIndex].baudrateIndex]);
+        DEBUG_SET(DEBUG_GPS_CONNECTION, 3, baudRates[gpsInitData[gpsData.userBaudRateIndex].baudrateIndex] / 100);  //!< Baud Rate / 100, Else Nav Message Age In Milliseconds
         // then start sending configuration settings
         gpsSetState(GPS_STATE_CONFIGURE);
         break;
@@ -1173,14 +1161,13 @@ static void gpsConfigureUblox(void)
             case UBLOX_ACQUIRE_MODEL:
                 ubloxSendNAV5Message(gpsConfig()->gps_ublox_acquire_model);
                 break;
-//                   *** temporarily disabled
-//                   case UBLOX_CFG_ANA:
-//                      i f (gpsData.ubloxM7orAbove) { // NavX5 support existed in M5 - in theory we could remove that check
-//                           ubloxSendNavX5Message();
-//                       } else {
-//                           gpsData.state_position++;
-//                       }
-//                       break;
+            case UBLOX_CFG_ANA:
+                if (gpsData.ubloxM7orAbove && gpsConfig()->gps_ublox_enable_ana) {
+                    ubloxAssistNowAutonomous();
+                } else {
+                    gpsData.state_position++;
+                }
+                break;
             case UBLOX_SET_SBAS:
                 ubloxSetSbas();
                 break;
@@ -1235,7 +1222,7 @@ static void gpsConfigureUblox(void)
                 }
                 break;
             case UBLOX_MSG_DOP:
-                // nav-pvt has what we need and is available M7 and above
+                // NAV-PVT only has pDOP (hDOP/vDOP estimated from pDOP in NAV-PVT handler)
                 if (gpsData.ubloxM9orAbove) {
                     ubloxSetMessageRateValSet(CFG_MSGOUT_UBX_NAV_DOP_UART1, 0);
                 } else if (gpsData.ubloxM7orAbove) {
@@ -1307,6 +1294,12 @@ static void gpsConfigureUblox(void)
 
 static void gpsConfigureHardware(void)
 {
+    // A serial provider set at runtime, such as by `defaults nosave` on a
+    // board using DroneCAN, has no port until the next boot.
+    if (!gpsPort) {
+        return;
+    }
+
     switch (gpsConfig()->provider) {
     case GPS_NMEA:
 #ifdef USE_GPS_NMEA
@@ -1343,6 +1336,99 @@ static void calculateNavInterval (void)
     gpsSol.navIntervalMs = constrain(navDeltaTimeMs, 50, 2500);
 }
 
+#if ENABLE_DRONECAN
+static void updateDronecanGPS(void)
+{
+    // Same 100 ms cadence as the virtual provider — there's no point polling
+    // faster than the GPS task's Hz profile while the cache is fed at the
+    // device's native rate from the DroneCAN RX path.
+    const uint32_t updateInterval = 100;
+    static uint32_t nextUpdateTime = 0;
+
+    if (cmp32(gpsData.now, nextUpdateTime) <= 0) {
+        return;
+    }
+    nextUpdateTime = gpsData.now + updateInterval;
+
+    gpsSolutionData_t incoming;
+    bool incomingHasFix = false;
+    if (!dronecanGnssGetLatest(&incoming, &incomingHasFix)) {
+        // No Fix2 frame yet; stay in GPS_STATE_INITIALIZED so the generic
+        // connection-timeout bookkeeping doesn't start ticking against an
+        // offline bus.
+        return;
+    }
+
+    // If the cached frame is stale treat it as no new data: don't bump
+    // lastNavMessage or keep SENSOR_GPS pegged, so the normal receive-timeout
+    // path can trip to GPS_STATE_LOST_COMMUNICATION when the module dies.
+    const timeUs_t updateUs = dronecanGnssLastUpdateUs();
+    const timeUs_t ageUs = micros() - updateUs;
+    if (ageUs >= 2000000) { // 2 s
+        gpsSetFixState(0);
+        return;
+    }
+
+    // Publish only what the module has actually sent since last time. The cache is polled on a
+    // fixed interval rather than driven by arrivals, so without this the same solution is
+    // republished every tick: the nav interval would report our poll rate instead of the
+    // module's, and onGpsNewData() would run again on a frame it has already consumed.
+    //
+    // Tracked with its own flag rather than treating timestamp 0 as "nothing published yet".
+    // Zero is a legal micros() value — briefly at boot, and again on every 32-bit wrap — so
+    // overloading it would silently drop a frame stamped in that microsecond. Compared for
+    // inequality rather than ordering, so a reset cache (dronecanGnssInit() clears the
+    // timestamp) publishes its first frame instead of waiting out the old value.
+    static timeUs_t lastPublishedUpdateUs = 0;
+    static bool havePublished = false;
+    if (havePublished && updateUs == lastPublishedUpdateUs) {
+        return;
+    }
+    lastPublishedUpdateUs = updateUs;
+    havePublished = true;
+
+    if (gpsData.state == GPS_STATE_INITIALIZED) {
+        gpsSetState(GPS_STATE_RECEIVING_DATA);
+    }
+
+    gpsSol = incoming;
+    gpsSol.time = gpsData.now;
+
+#ifdef USE_RTC_TIME
+    if (!rtcHasTime() && gpsSol.dateTime.valid) {
+        dateTime_t dt;
+        dt.year = gpsSol.dateTime.year;
+        dt.month = gpsSol.dateTime.month;
+        dt.day = gpsSol.dateTime.day;
+        dt.hours = gpsSol.dateTime.hour;
+        dt.minutes = gpsSol.dateTime.min;
+        dt.seconds = gpsSol.dateTime.sec;
+        dt.millis = gpsSol.dateTime.millis;
+        rtcSetDateTime(&dt);
+    }
+#endif
+
+    // The module's own status says whether it has a 3D solution; the count is no
+    // longer a proxy for it, because the count now keeps reporting while the
+    // module is still acquiring. Both are required, which is exactly the
+    // condition that held before: numSat was cleared below a 3D fix, so the old
+    // `numSat > 3` test could only pass on a 3D fix with more than three
+    // satellites. Whether the count should still gate the fix at all is a
+    // separate question from reporting it, and is left alone here.
+    // Set before publishing the frame, so onGpsNewData() sees it.
+    gpsSetFixState(incomingHasFix && gpsSol.numSat > 3);
+
+    calculateNavInterval();
+
+    // Publish through the shared path rather than repeating it. Besides the
+    // bookkeeping this used to duplicate — lastNavMessage, SENSOR_GPS, the tick
+    // and onGpsNewData() — it carries the two DEBUG_GPS_CONNECTION writes that
+    // live nowhere else, so nav interval and nav message age were stuck at zero
+    // on this provider while every serial one reported them.
+    gpsHandleFrameComplete();
+}
+#endif
+
 #if defined(USE_VIRTUAL_GPS)
 static void updateVirtualGPS(void)
 {
@@ -1350,48 +1436,116 @@ static void updateVirtualGPS(void)
     static uint32_t nextUpdateTime = 0;
 
     if (cmp32(gpsData.now, nextUpdateTime) > 0) {
-        if (gpsData.state == GPS_STATE_INITIALIZED) {
-            gpsSetState(GPS_STATE_RECEIVING_DATA);
+        // Freshness is a feeder-thread counter, checked against this task's
+        // own clock: a stale feed leaves lastNavMessage frozen so the
+        // RECEIVING_DATA timeout below trips, exactly as a real receiver
+        // going dark. Fresh data recovers from the post-timeout DETECT_BAUD
+        // parking state.
+        static uint32_t lastCount = 0;
+        static uint32_t lastCountChangeMs = 0;
+        const uint32_t count = getVirtualGPSUpdateCount();
+        if (count != lastCount) {
+            lastCount = count;
+            lastCountChangeMs = gpsData.now;
         }
+        const bool fresh = (lastCountChangeMs != 0) && (cmp32(gpsData.now, lastCountChangeMs) < GPS_TIMEOUT_MS);
 
-        getVirtualGPS(&gpsSol);
-        gpsSol.time = gpsData.now;
+        if (fresh) {
+            if (gpsData.state == GPS_STATE_INITIALIZED || gpsData.state == GPS_STATE_DETECT_BAUD) {
+                gpsSetState(GPS_STATE_RECEIVING_DATA);
+            }
+            getVirtualGPS(&gpsSol);
+            gpsSol.time = gpsData.now;
 
-        gpsData.lastNavMessage = gpsData.now;
-        sensorsSet(SENSOR_GPS);
+            gpsData.lastNavMessage = gpsData.now;
+            sensorsSet(SENSOR_GPS);
 
-        if (gpsSol.numSat > 3) {
-            gpsSetFixState(GPS_FIX);
-        } else {
-            gpsSetFixState(0);
+            if (gpsSol.numSat > 3) {
+                gpsSetFixState(GPS_FIX);
+            } else {
+                gpsSetFixState(0);
+            }
+            GPS_update ^= GPS_DIRECT_TICK;
+
+            calculateNavInterval();
+            onGpsNewData();
         }
-        GPS_update ^= GPS_DIRECT_TICK;
-
-        calculateNavInterval();
-        onGpsNewData();
 
         nextUpdateTime = gpsData.now + updateInterval;
     }
 }
 #endif
 
+void rescheduleWhenNecessary(uint8_t* wait, bool* isFast)
+{
+    if (*wait < 1) {
+        (*wait)++;
+    } else if (*wait == 1) {
+        (*wait)++;
+        // wait one iteration to be sure the buffer is empty, then reset to the slower task interval
+        *isFast = false;
+        rescheduleTask(TASK_SELF, TASK_PERIOD_HZ(TASK_GPS_RATE));
+    }
+}
+
+static bool ubloxParsingAlmostDone = false;
+
+static inline uint32_t cpuCycleLimit(void)
+{
+    if (ubloxParsingAlmostDone) {
+        return clockMicrosToCycles(GPS_UBLOX_RECV_TIME_MAX - GPS_FRAME_PROCESS_TIME_US);
+    }
+    return clockMicrosToCycles(GPS_UBLOX_RECV_TIME_MAX);
+}
+
 void gpsUpdate(timeUs_t currentTimeUs)
 {
     static timeDelta_t gpsStateDurationFractionUs[GPS_STATE_COUNT];
-    timeDelta_t executeTimeUs;
     gpsState_e gpsCurrentState = gpsData.state;
+    uint32_t rxBytesWaiting = 0;
     gpsData.now = millis();
 
     switch (gpsConfig()->provider) {
+#ifdef USE_GPS_UBLOX
     case GPS_UBLOX:
-    case GPS_NMEA:
+    {
         if (!gpsPort) {
             break;
         }
-        DEBUG_SET(DEBUG_GPS_CONNECTION, 7, serialRxBytesWaiting(gpsPort));
+        rxBytesWaiting = serialRxBytesWaiting(gpsPort);
+        DEBUG_SET(DEBUG_GPS_CONNECTION, 7, rxBytesWaiting);  //!< Rx Bytes Waiting [unit:bytes]
+        const uint32_t initialCycleCount = getCycleCounter();
         static uint8_t wait = 0;
         static bool isFast = false;
-        while (serialRxBytesWaiting(gpsPort)) {
+        while (rxBytesWaiting-- > 0) {
+            wait = 0;
+            if (!isFast) {
+                rescheduleTask(TASK_SELF, TASK_PERIOD_HZ(TASK_GPS_RATE_FAST));
+                isFast = true;
+            }
+            if (cmp32((getCycleCounter() - initialCycleCount), cpuCycleLimit()) > 0) {
+                break;
+            }
+            if (gpsNewFrameUBLOX(serialRead(gpsPort))) {
+                gpsHandleFrameComplete();
+            }
+        }
+        rescheduleWhenNecessary(&wait, &isFast);
+        break;
+    }
+#endif
+
+#ifdef USE_GPS_NMEA
+    case GPS_NMEA:
+    {
+        if (!gpsPort) {
+            break;
+        }
+        rxBytesWaiting = serialRxBytesWaiting(gpsPort);
+        DEBUG_SET(DEBUG_GPS_CONNECTION, 7, rxBytesWaiting);  //!< Rx Bytes Waiting [unit:bytes]
+        static uint8_t wait = 0;
+        static bool isFast = false;
+        while (rxBytesWaiting-- > 0) {
             wait = 0;
             if (!isFast) {
                 rescheduleTask(TASK_SELF, TASK_PERIOD_HZ(TASK_GPS_RATE_FAST));
@@ -1400,18 +1554,14 @@ void gpsUpdate(timeUs_t currentTimeUs)
             if (cmpTimeUs(micros(), currentTimeUs) > GPS_RECV_TIME_MAX) {
                 break;
             }
-            // Add every byte to _buffer, when enough bytes are received, convert data to values
-            gpsNewData(serialRead(gpsPort));
+            if (gpsNewFrameNMEA(serialRead(gpsPort))) {
+                gpsHandleFrameComplete();
+            }
         }
-        if (wait < 1) {
-            wait++;
-        } else if (wait == 1) {
-            wait++;
-            // wait one iteration be sure the buffer is empty, then reset to the slower task interval
-            isFast = false;
-            rescheduleTask(TASK_SELF, TASK_PERIOD_HZ(TASK_GPS_RATE));
-        }
+        rescheduleWhenNecessary(&wait, &isFast);
         break;
+    }
+#endif
 
     case GPS_MSP:
         if (GPS_update & GPS_MSP_UPDATE) { // GPS data received via MSP
@@ -1420,7 +1570,7 @@ void gpsUpdate(timeUs_t currentTimeUs)
             }
 
             // Data is available
-            DEBUG_SET(DEBUG_GPS_CONNECTION, 3, gpsData.now - gpsData.lastNavMessage); // interval since last Nav data was received
+            DEBUG_SET(DEBUG_GPS_CONNECTION, 3, gpsData.now - gpsData.lastNavMessage);  //!< Baud Rate / 100, Else Nav Message Age In Milliseconds
             gpsData.lastNavMessage = gpsData.now;
             sensorsSet(SENSOR_GPS);
 
@@ -1430,7 +1580,7 @@ void gpsUpdate(timeUs_t currentTimeUs)
 
             GPS_update &= ~GPS_MSP_UPDATE;
         } else {
-            DEBUG_SET(DEBUG_GPS_CONNECTION, 2, gpsData.now - gpsData.lastNavMessage); // time since last Nav data, updated each GPS task interval
+            DEBUG_SET(DEBUG_GPS_CONNECTION, 2, gpsData.now - gpsData.lastNavMessage);  //!< Baud Detect Progress, Else Nav Message Age In Milliseconds
             // check for no data/gps timeout/cable disconnection etc
             if (cmp32(gpsData.now, gpsData.lastNavMessage) > GPS_TIMEOUT_MS) {
                 gpsSetState(GPS_STATE_LOST_COMMUNICATION);
@@ -1440,6 +1590,11 @@ void gpsUpdate(timeUs_t currentTimeUs)
 #if defined(USE_VIRTUAL_GPS)
     case GPS_VIRTUAL:
         updateVirtualGPS();
+        break;
+#endif
+#if ENABLE_DRONECAN
+    case GPS_DRONECAN:
+        updateDronecanGPS();
         break;
 #endif
     }
@@ -1468,14 +1623,14 @@ void gpsUpdate(timeUs_t currentTimeUs)
         if (gpsConfig()->provider == GPS_UBLOX || gpsConfig()->provider == GPS_NMEA) {      // TODO  Send ublox message to nmea GPS?
             if (gpsConfig()->autoConfig == GPS_AUTOCONFIG_ON) {
                 // when we are connected up, and get a 3D fix, enable the 'flight' fix model
-                if (!gpsData.ubloxUsingFlightModel && STATE(GPS_FIX)) {
+                if (gpsPort && !gpsData.ubloxUsingFlightModel && STATE(GPS_FIX)) {
                     gpsData.ubloxUsingFlightModel = true;
                     ubloxSendNAV5Message(gpsConfig()->gps_ublox_flight_model);
                 }
             }
         }
 #endif
-        DEBUG_SET(DEBUG_GPS_CONNECTION, 2, gpsData.now - gpsData.lastNavMessage); // time since last Nav data, updated each GPS task interval
+        DEBUG_SET(DEBUG_GPS_CONNECTION, 2, gpsData.now - gpsData.lastNavMessage);  //!< Baud Detect Progress, Else Nav Message Age In Milliseconds
         // check for no data/gps timeout/cable disconnection etc
         if (cmp32(gpsData.now, gpsData.lastNavMessage) > GPS_TIMEOUT_MS) {
             gpsSetState(GPS_STATE_LOST_COMMUNICATION);
@@ -1483,8 +1638,8 @@ void gpsUpdate(timeUs_t currentTimeUs)
         break;
     }
 
-    DEBUG_SET(DEBUG_GPS_CONNECTION, 4, (gpsData.state * 100 + gpsData.state_position));
-    DEBUG_SET(DEBUG_GPS_CONNECTION, 6, gpsData.ackState);
+    DEBUG_SET(DEBUG_GPS_CONNECTION, 4, (gpsData.state * 100 + gpsData.state_position));  //!< State And State Position
+    DEBUG_SET(DEBUG_GPS_CONNECTION, 6, gpsData.ackState);                                //!< Config Ack State [enum:ubloxAckState_e]
 
     if (sensors(SENSOR_GPS)) {
         updateGpsIndicator(currentTimeUs);
@@ -1504,12 +1659,12 @@ void gpsUpdate(timeUs_t currentTimeUs)
         }
     }
 
-    DEBUG_SET(DEBUG_GPS_DOP, 0, gpsSol.numSat);
-    DEBUG_SET(DEBUG_GPS_DOP, 1, gpsSol.dop.pdop);
-    DEBUG_SET(DEBUG_GPS_DOP, 2, gpsSol.dop.hdop);
-    DEBUG_SET(DEBUG_GPS_DOP, 3, gpsSol.dop.vdop);
+    DEBUG_SET(DEBUG_GPS_DOP, 0, gpsSol.numSat);    //!< Satellite Count
+    DEBUG_SET(DEBUG_GPS_DOP, 1, gpsSol.dop.pdop);  //!< Positional DOP [unit:0.01]
+    DEBUG_SET(DEBUG_GPS_DOP, 2, gpsSol.dop.hdop);  //!< Horizontal DOP [unit:0.01]
+    DEBUG_SET(DEBUG_GPS_DOP, 3, gpsSol.dop.vdop);  //!< Vertical DOP [unit:0.01]
 
-    executeTimeUs = micros() - currentTimeUs;
+    timeDelta_t executeTimeUs = micros() - currentTimeUs;
     if (executeTimeUs > (gpsStateDurationFractionUs[gpsCurrentState] >> GPS_TASK_DECAY_SHIFT)) {
         gpsStateDurationFractionUs[gpsCurrentState] += (2 << GPS_TASK_DECAY_SHIFT);
     } else {
@@ -1518,26 +1673,30 @@ void gpsUpdate(timeUs_t currentTimeUs)
     }
     schedulerSetNextStateTime(gpsStateDurationFractionUs[gpsCurrentState] >> GPS_TASK_DECAY_SHIFT);
 
-    DEBUG_SET(DEBUG_GPS_CONNECTION, 5, executeTimeUs);
+    DEBUG_SET(DEBUG_GPS_CONNECTION, 5, executeTimeUs);  //!< Task Execute Time [unit:us]
 //    keeping temporarily, to be used when debugging the scheduler stuff
 //    DEBUG_SET(DEBUG_GPS_CONNECTION, 6, (gpsStateDurationFractionUs[gpsCurrentState] >> GPS_TASK_DECAY_SHIFT));
 }
 
-static void gpsNewData(uint16_t c)
+static void gpsHandleFrameComplete(void)
 {
-    DEBUG_SET(DEBUG_GPS_CONNECTION, 1, gpsSol.navIntervalMs);
+    DEBUG_SET(DEBUG_GPS_CONNECTION, 1, gpsSol.navIntervalMs);  //!< Nav Interval [unit:ms]
+    if (gpsData.state == GPS_STATE_RECEIVING_DATA) {
+        DEBUG_SET(DEBUG_GPS_CONNECTION, 3, gpsData.now - gpsData.lastNavMessage);  //!< Baud Rate / 100, Else Nav Message Age In Milliseconds
+        gpsData.lastNavMessage = gpsData.now;
+        sensorsSet(SENSOR_GPS);
+    }
+    GPS_update ^= GPS_DIRECT_TICK;
+    onGpsNewData();
+}
+
+static void gpsNewData(uint8_t c)
+{
     if (!gpsNewFrame(c)) {
         // no new nav solution data
         return;
     }
-    if (gpsData.state == GPS_STATE_RECEIVING_DATA) {
-        DEBUG_SET(DEBUG_GPS_CONNECTION, 3, gpsData.now - gpsData.lastNavMessage); // interval since last Nav data was received
-        gpsData.lastNavMessage = gpsData.now;
-        sensorsSet(SENSOR_GPS);
-        // use the baud rate debug once receiving data
-    }
-    GPS_update ^= GPS_DIRECT_TICK;
-    onGpsNewData();
+    gpsHandleFrameComplete();
 }
 
 #ifdef USE_GPS_UBLOX
@@ -1862,7 +2021,7 @@ static bool writeGpsSolutionNmea(gpsSolutionData_t *sol, const gpsDataNmea_t *da
 static bool gpsNewFrameNMEA(char c)
 {
     static gpsDataNmea_t gps_msg;
-    static char string[15];
+    static char string[16];
     static uint8_t param = 0, offset = 0, parity = 0;
     static uint8_t checksum_param, gps_frame = NO_FRAME;
     bool receivedNavMessage = false;
@@ -1936,6 +2095,48 @@ static bool gpsNewFrameNMEA(char c)
     return receivedNavMessage;
 }
 #endif // USE_GPS_NMEA
+
+// Days from start of year for each month (non-leap year first row, leap year second row)
+static const uint16_t gpsMonthDays[2][12] = {
+    { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 }, // Non-leap year
+    { 0, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335 }  // Leap year
+};
+
+// Convert Unix seconds and milliseconds to gpsDateTime_t
+void gpsUnixSecondsToDateTime(gpsDateTime_t *dt, int64_t unixSeconds, uint16_t millis)
+{
+    dt->sec = unixSeconds % 60;
+    unixSeconds /= 60;
+    dt->min = unixSeconds % 60;
+    unixSeconds /= 60;
+    dt->hour = unixSeconds % 24;
+    int32_t days = unixSeconds / 24;
+
+    // Calculate year and day of year from 1970
+    int year = 1970;
+    while (true) {
+        int daysInYear = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) ? 366 : 365;
+        if (days < daysInYear) {
+            break;
+        }
+        days -= daysInYear;
+        year++;
+    }
+    dt->year = year;
+
+    int isLeap = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) ? 1 : 0;
+
+    int month;
+    for (month = 11; month > 0; month--) {
+        if (days >= gpsMonthDays[isLeap][month]) {
+            break;
+        }
+    }
+    dt->month = month + 1;
+    dt->day = days - gpsMonthDays[isLeap][month] + 1;
+
+    dt->millis = millis;
+}
 
 #ifdef USE_GPS_UBLOX
 // UBX support
@@ -2160,12 +2361,190 @@ typedef enum {
 static ubxFrameParseState_e ubxFrameParseState = UBX_PARSE_PREAMBLE_SYNC_1;
 static uint16_t ubxFrameParsePayloadCounter;
 
-// SCEDEBUG To help debug which message is slow to process
-// static uint8_t lastUbxRcvMsgClass;
-// static uint8_t lastUbxRcvMsgID;
-
 // Combines message class & ID for a single value to switch on.
 #define CLSMSG(cls, msg) (((cls) << 8) | (msg))
+
+// GPS epoch is Jan 6, 1980. Unix epoch is Jan 1, 1970.
+// Offset in seconds from Unix epoch to GPS epoch
+#define GPS_EPOCH_OFFSET_SECONDS 315964800
+// Current GPS-UTC leap seconds offset (as of 2017, 18 leap seconds)
+#define GPS_LEAP_SECONDS 18
+
+// Convert date/time to Unix seconds (UTC)
+static int64_t dateTimeToUnixSeconds(uint16_t year, uint8_t month, uint8_t day, uint8_t hour, uint8_t min, uint8_t sec)
+{
+    int32_t days = 0;
+    for (int y = 1970; y < year; y++) {
+        days += (y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)) ? 366 : 365;
+    }
+    int isLeap = (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)) ? 1 : 0;
+    days += gpsMonthDays[isLeap][month - 1] + (day - 1);
+    return (int64_t)days * 86400 + hour * 3600 + min * 60 + sec;
+}
+
+// Convert gpsDateTime_t to Unix epoch seconds; returns 0 if not valid
+uint32_t gpsDateTimeToEpoch(const gpsDateTime_t *dt)
+{
+    if (!dt || !dt->valid) {
+        return 0;
+    }
+
+    if (dt->year < 1980 || dt->month < 1 || dt->month > 12 || dt->day < 1 ||
+        dt->day > 31 || dt->hour > 23 || dt->min > 59 || dt->sec > 60) {
+        return 0;
+    }
+
+    return (uint32_t)dateTimeToUnixSeconds(dt->year, dt->month, dt->day, dt->hour, dt->min, dt->sec);
+}
+
+// NAV-PVT already carries UTC calendar fields; only the nanosecond correction can
+// require a one-second calendar adjustment.
+static bool gpsDateTimeIsLeapYear(uint16_t year)
+{
+    return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+}
+
+static uint8_t gpsDateTimeDaysInMonth(uint16_t year, uint8_t month)
+{
+    static const uint8_t daysInMonth[] = {
+        31, 28, 31, 30, 31, 30,
+        31, 31, 30, 31, 30, 31
+    };
+
+    if (month == 2 && gpsDateTimeIsLeapYear(year)) {
+        return 29;
+    }
+
+    return daysInMonth[month - 1];
+}
+
+static void gpsDateTimeAddOneSecond(gpsDateTime_t *dt)
+{
+    if (++dt->sec <= 59) {
+        return;
+    }
+
+    dt->sec = 0;
+    if (++dt->min <= 59) {
+        return;
+    }
+
+    dt->min = 0;
+    if (++dt->hour <= 23) {
+        return;
+    }
+
+    dt->hour = 0;
+    if (++dt->day <= gpsDateTimeDaysInMonth(dt->year, dt->month)) {
+        return;
+    }
+
+    dt->day = 1;
+    if (++dt->month <= 12) {
+        return;
+    }
+
+    dt->month = 1;
+    dt->year++;
+}
+
+static void gpsDateTimeSubtractOneSecond(gpsDateTime_t *dt)
+{
+    if (dt->sec > 0) {
+        dt->sec--;
+        return;
+    }
+
+    dt->sec = 59;
+    if (dt->min > 0) {
+        dt->min--;
+        return;
+    }
+
+    dt->min = 59;
+    if (dt->hour > 0) {
+        dt->hour--;
+        return;
+    }
+
+    dt->hour = 23;
+    if (dt->day > 1) {
+        dt->day--;
+        return;
+    }
+
+    if (dt->month > 1) {
+        dt->month--;
+    } else {
+        dt->month = 12;
+        dt->year--;
+    }
+    dt->day = gpsDateTimeDaysInMonth(dt->year, dt->month);
+}
+
+static void gpsDateTimeFromNavPvt(gpsDateTime_t *dt, const ubxNavPvt_t *navPvt)
+{
+    dt->valid = (navPvt->valid & NAV_VALID_DATE) && (navPvt->valid & NAV_VALID_TIME);
+    if (!dt->valid) {
+        return;
+    }
+
+    dt->year = navPvt->year;
+    dt->month = navPvt->month;
+    dt->day = navPvt->day;
+    dt->hour = navPvt->hour;
+    dt->min = navPvt->min;
+    dt->sec = navPvt->sec;
+
+    const int32_t nanoMs = navPvt->nano / 1000000;
+    if (nanoMs < 0) {
+        dt->millis = (uint16_t)(nanoMs + 1000);
+        gpsDateTimeSubtractOneSecond(dt);
+    } else if (nanoMs >= 1000) {
+        dt->millis = (uint16_t)(nanoMs - 1000);
+        gpsDateTimeAddOneSecond(dt);
+    } else {
+        dt->millis = (uint16_t)nanoMs;
+    }
+}
+
+// Convert GPS week number and time-of-week to gpsDateTime_t
+static void gpsWeekTimeToDateTime(gpsDateTime_t *dt, int16_t week, uint32_t timeOfWeekMs, int32_t timeOfWeekNs)
+{
+    int64_t gpsSeconds = (int64_t)week * 7 * 24 * 3600 + timeOfWeekMs / 1000;
+
+    // Calculate milliseconds including nanosecond adjustment (can be negative)
+    int32_t millis = (int32_t)(timeOfWeekMs % 1000) + timeOfWeekNs / 1000000;
+
+    // Handle carry/borrow from nanosecond adjustment
+    if (millis < 0) {
+        millis += 1000;
+        gpsSeconds--;
+    } else if (millis >= 1000) {
+        millis -= 1000;
+        gpsSeconds++;
+    }
+
+    int64_t unixSeconds = gpsSeconds + GPS_EPOCH_OFFSET_SECONDS - GPS_LEAP_SECONDS;
+    gpsUnixSecondsToDateTime(dt, unixSeconds, (uint16_t)millis);
+}
+
+#ifdef USE_RTC_TIME
+// Set system clock once when GPS time is available
+static void setRtcDateTimeFromGps(void) {
+    if (!rtcHasTime() && gpsSol.dateTime.valid) {
+        dateTime_t dt;
+        dt.year = gpsSol.dateTime.year;
+        dt.month = gpsSol.dateTime.month;
+        dt.day = gpsSol.dateTime.day;
+        dt.hours = gpsSol.dateTime.hour;
+        dt.minutes = gpsSol.dateTime.min;
+        dt.seconds = gpsSol.dateTime.sec;
+        dt.millis = gpsSol.dateTime.millis;
+        rtcSetDateTime(&dt);
+    }
+}
+#endif
 
 static bool UBLOX_parse_gps(void)
 {
@@ -2177,6 +2556,75 @@ static bool UBLOX_parse_gps(void)
 #endif
     switch (CLSMSG(ubxRcvMsgClass, ubxRcvMsgID)) {
 
+    case CLSMSG(CLASS_NAV, MSG_NAV_PVT):
+#ifdef USE_DASHBOARD
+        *dashboardGpsPacketLogCurrentChar = DASHBOARD_LOG_UBLOX_SOL;
+#endif
+        ubxHaveNewValidFix = (ubxRcvMsgPayload.ubxNavPvt.flags & NAV_STATUS_FIX_VALID) && (ubxRcvMsgPayload.ubxNavPvt.fixType == FIX_3D);
+        gpsSol.time = ubxRcvMsgPayload.ubxNavPvt.time;
+        calculateNavInterval();
+        gpsSol.llh.lon = ubxRcvMsgPayload.ubxNavPvt.lon;
+        gpsSol.llh.lat = ubxRcvMsgPayload.ubxNavPvt.lat;
+        gpsSol.llh.altCm = ubxRcvMsgPayload.ubxNavPvt.hMSL / 10;  //alt in cm
+        gpsSetFixState(ubxHaveNewValidFix);
+        ubxHaveNewPosition = true;
+        gpsSol.numSat = ubxRcvMsgPayload.ubxNavPvt.numSV;
+        gpsSol.acc.hAcc = ubxRcvMsgPayload.ubxNavPvt.hAcc;
+        gpsSol.acc.vAcc = ubxRcvMsgPayload.ubxNavPvt.vAcc;
+        gpsSol.acc.sAcc = ubxRcvMsgPayload.ubxNavPvt.sAcc;
+        gpsSol.acc.headAcc = ubxRcvMsgPayload.ubxNavPvt.headAcc;
+        // gSpeed & velD are in mm/s (int32_t), gpsSol.speed3d in cm/s (uint16_t)
+        float gs = (float)ubxRcvMsgPayload.ubxNavPvt.gSpeed;
+        float vd = (float)ubxRcvMsgPayload.ubxNavPvt.velD;
+        gpsSol.speed3d = (uint16_t)(sqrtf(sq(gs) + sq(vd)) * 0.1f);     // mm/s -> cm/s
+        // Update 2D ground speed (mm/s -> cm/s) for NAV-PVT when NAV-VELNED is disabled
+        gpsSol.groundSpeed = (uint16_t)(ubxRcvMsgPayload.ubxNavPvt.gSpeed / 10);    // cm/s
+        gpsSol.groundCourse = (uint16_t)(ubxRcvMsgPayload.ubxNavPvt.headMot / 10000);     // Heading 2D deg * 100000 rescaled to deg * 10
+        gpsSol.dop.pdop = ubxRcvMsgPayload.ubxNavPvt.pDOP;
+        // NAV-PVT doesn't provide hDOP/vDOP, estimate from pDOP (pDOP >= hDOP/vDOP, so this is conservative)
+        gpsSol.dop.hdop = ubxRcvMsgPayload.ubxNavPvt.pDOP;
+        gpsSol.dop.vdop = ubxRcvMsgPayload.ubxNavPvt.pDOP;
+        gpsSol.velned.velN = (int16_t)(ubxRcvMsgPayload.ubxNavPvt.velN / 10); // cm/s
+        gpsSol.velned.velE = (int16_t)(ubxRcvMsgPayload.ubxNavPvt.velE / 10); // cm/s
+        gpsSol.velned.velD = (int16_t)(ubxRcvMsgPayload.ubxNavPvt.velD / 10); // cm/s
+        ubxHaveNewSpeed = true;
+        // Store GPS date/time for telemetry, applying nano correction per u-blox spec.
+        gpsDateTimeFromNavPvt(&gpsSol.dateTime, &ubxRcvMsgPayload.ubxNavPvt);
+#ifdef USE_RTC_TIME
+        setRtcDateTimeFromGps();
+#endif
+        break;
+    case CLSMSG(CLASS_NAV, MSG_NAV_SAT):
+#ifdef USE_DASHBOARD
+        *dashboardGpsPacketLogCurrentChar = DASHBOARD_LOG_UBLOX_SVINFO; // The display log only shows SVINFO for both SVINFO and SAT.
+#endif
+        GPS_numCh = MIN(ubxRcvMsgPayload.ubxNavSat.numSvs, GPS_SV_MAXSATS_M8N);
+        // If we're receiving UBX-NAV-SAT messages, we detected a module M8 or newer.
+        // We can receive far more sats than we can handle for Configurator, which is the primary consumer for sat info.
+        // We're using the max for M8 (32) for our sizing, since Configurator only supports a max of 32 sats and we
+        // want to limit the payload buffer space used.
+        // We simply ignore any sats above that max, the down side is we may not see sats used for the solution, but
+        // the intent in Configurator is to see if sats are being acquired and their strength, so this is not an issue.
+        for (unsigned i = 0; i < ARRAYLEN(GPS_svinfo); i++) {
+            if (i < GPS_numCh) {
+                GPS_svinfo[i].chn = ubxRcvMsgPayload.ubxNavSat.svs[i].gnssId;
+                GPS_svinfo[i].svid = ubxRcvMsgPayload.ubxNavSat.svs[i].svId;
+                GPS_svinfo[i].cno = ubxRcvMsgPayload.ubxNavSat.svs[i].cno;
+                GPS_svinfo[i].quality = ubxRcvMsgPayload.ubxNavSat.svs[i].flags;
+            } else {
+                GPS_svinfo[i] = (GPS_svinfo_t){ .chn = 255 };
+            }
+        }
+
+        // Setting the number of channels higher than GPS_SV_MAXSATS_LEGACY is the only way to tell BF Configurator we're sending the
+        // enhanced sat list info without changing the MSP protocol. Also, we're sending the complete list each time even if it's empty, so
+        // BF Conf can erase old entries shown on screen when channels are removed from the list.
+        // TODO: GPS_numCh = MAX(GPS_numCh, GPS_SV_MAXSATS_LEGACY + 1);
+        GPS_numCh = GPS_SV_MAXSATS_M8N;
+#ifdef USE_DASHBOARD
+        dashboardGpsNavSvInfoRcvCount++;
+#endif
+        break;
     case CLSMSG(CLASS_MON, MSG_MON_VER):
 #ifdef USE_DASHBOARD
         *dashboardGpsPacketLogCurrentChar = DASHBOARD_LOG_UBLOX_MONVER;
@@ -2223,13 +2671,16 @@ static bool UBLOX_parse_gps(void)
         if (!ubxHaveNewValidFix)
             DISABLE_STATE(GPS_FIX);
         gpsSol.numSat = ubxRcvMsgPayload.ubxNavSol.satellites;
-#ifdef USE_RTC_TIME
-        //set clock, when gps time is available
-        if (!rtcHasTime() && (ubxRcvMsgPayload.ubxNavSol.fix_status & NAV_STATUS_TIME_SECOND_VALID) && (ubxRcvMsgPayload.ubxNavSol.fix_status & NAV_STATUS_TIME_WEEK_VALID)) {
-            //calculate rtctime: week number * ms in a week + ms of week + fractions of second + offset to UNIX reference year - 18 leap seconds
-            rtcTime_t temp_time = (((int64_t) ubxRcvMsgPayload.ubxNavSol.week) * 7 * 24 * 60 * 60 * 1000) + ubxRcvMsgPayload.ubxNavSol.time + (ubxRcvMsgPayload.ubxNavSol.time_nsec / 1000000) + 315964800000LL - 18000;
-            rtcSet(&temp_time);
+        // Store GPS date/time for telemetry (NAV-SOL only has week + time-of-week, not direct date/time)
+        gpsSol.dateTime.valid = (ubxRcvMsgPayload.ubxNavSol.fix_status & NAV_STATUS_TIME_SECOND_VALID) && (ubxRcvMsgPayload.ubxNavSol.fix_status & NAV_STATUS_TIME_WEEK_VALID);
+        if (gpsSol.dateTime.valid) {
+            gpsWeekTimeToDateTime(&gpsSol.dateTime,
+                                  ubxRcvMsgPayload.ubxNavSol.week,
+                                  ubxRcvMsgPayload.ubxNavSol.time,
+                                  ubxRcvMsgPayload.ubxNavSol.time_nsec);
         }
+#ifdef USE_RTC_TIME
+        setRtcDateTimeFromGps();
 #endif
         break;
     case CLSMSG(CLASS_NAV, MSG_NAV_VELNED):
@@ -2237,44 +2688,14 @@ static bool UBLOX_parse_gps(void)
         *dashboardGpsPacketLogCurrentChar = DASHBOARD_LOG_UBLOX_VELNED;
 #endif
         gpsSol.speed3d = ubxRcvMsgPayload.ubxNavVelned.speed_3d;       // cm/s
-        gpsSol.groundSpeed = ubxRcvMsgPayload.ubxNavVelned.speed_2d;   // cm/s
+        gpsSol.groundSpeed = ubxRcvMsgPayload.ubxNavVelned.speed_2d;    // cm/s
         gpsSol.groundCourse = (uint16_t) (ubxRcvMsgPayload.ubxNavVelned.heading_2d / 10000);     // Heading 2D deg * 100000 rescaled to deg * 10
-        ubxHaveNewSpeed = true;
-        break;
-    case CLSMSG(CLASS_NAV, MSG_NAV_PVT):
-#ifdef USE_DASHBOARD
-        *dashboardGpsPacketLogCurrentChar = DASHBOARD_LOG_UBLOX_SOL;
-#endif
-        ubxHaveNewValidFix = (ubxRcvMsgPayload.ubxNavPvt.flags & NAV_STATUS_FIX_VALID) && (ubxRcvMsgPayload.ubxNavPvt.fixType == FIX_3D);
-        gpsSol.time = ubxRcvMsgPayload.ubxNavPvt.time;
-        calculateNavInterval();
-        gpsSol.llh.lon = ubxRcvMsgPayload.ubxNavPvt.lon;
-        gpsSol.llh.lat = ubxRcvMsgPayload.ubxNavPvt.lat;
-        gpsSol.llh.altCm = ubxRcvMsgPayload.ubxNavPvt.hMSL / 10;  //alt in cm
-        gpsSetFixState(ubxHaveNewValidFix);
-        ubxHaveNewPosition = true;
-        gpsSol.numSat = ubxRcvMsgPayload.ubxNavPvt.numSV;
-        gpsSol.acc.hAcc = ubxRcvMsgPayload.ubxNavPvt.hAcc;
-        gpsSol.acc.vAcc = ubxRcvMsgPayload.ubxNavPvt.vAcc;
-        gpsSol.acc.sAcc = ubxRcvMsgPayload.ubxNavPvt.sAcc;
-        gpsSol.speed3d = (uint16_t) sqrtf(powf(ubxRcvMsgPayload.ubxNavPvt.gSpeed / 10, 2.0f) + powf(ubxRcvMsgPayload.ubxNavPvt.velD / 10, 2.0f));
-        gpsSol.groundSpeed = ubxRcvMsgPayload.ubxNavPvt.gSpeed / 10;    // cm/s
-        gpsSol.groundCourse = (uint16_t) (ubxRcvMsgPayload.ubxNavPvt.headMot / 10000);     // Heading 2D deg * 100000 rescaled to deg * 10
-        gpsSol.dop.pdop = ubxRcvMsgPayload.ubxNavPvt.pDOP;
+        gpsSol.velned.velN = (int16_t)ubxRcvMsgPayload.ubxNavVelned.ned_north; // cm/s
+        gpsSol.velned.velE = (int16_t)ubxRcvMsgPayload.ubxNavVelned.ned_east; // cm/s
+        gpsSol.velned.velD = (int16_t)ubxRcvMsgPayload.ubxNavVelned.ned_down; // cm/s
         ubxHaveNewSpeed = true;
 #ifdef USE_RTC_TIME
-        //set clock, when gps time is available
-        if (!rtcHasTime() && (ubxRcvMsgPayload.ubxNavPvt.valid & NAV_VALID_DATE) && (ubxRcvMsgPayload.ubxNavPvt.valid & NAV_VALID_TIME)) {
-            dateTime_t dt;
-            dt.year = ubxRcvMsgPayload.ubxNavPvt.year;
-            dt.month = ubxRcvMsgPayload.ubxNavPvt.month;
-            dt.day = ubxRcvMsgPayload.ubxNavPvt.day;
-            dt.hours = ubxRcvMsgPayload.ubxNavPvt.hour;
-            dt.minutes = ubxRcvMsgPayload.ubxNavPvt.min;
-            dt.seconds = ubxRcvMsgPayload.ubxNavPvt.sec;
-            dt.millis = (ubxRcvMsgPayload.ubxNavPvt.nano > 0) ? ubxRcvMsgPayload.ubxNavPvt.nano / 1000000 : 0; // up to 5ms of error
-            rtcSetDateTime(&dt);
-        }
+        setRtcDateTimeFromGps();
 #endif
         break;
     case CLSMSG(CLASS_NAV, MSG_NAV_SVINFO):
@@ -2298,37 +2719,6 @@ static bool UBLOX_parse_gps(void)
                 GPS_svinfo[i] = (GPS_svinfo_t){0};
             }
         }
-#ifdef USE_DASHBOARD
-        dashboardGpsNavSvInfoRcvCount++;
-#endif
-        break;
-    case CLSMSG(CLASS_NAV, MSG_NAV_SAT):
-#ifdef USE_DASHBOARD
-        *dashboardGpsPacketLogCurrentChar = DASHBOARD_LOG_UBLOX_SVINFO; // The display log only shows SVINFO for both SVINFO and SAT.
-#endif
-        GPS_numCh = MIN(ubxRcvMsgPayload.ubxNavSat.numSvs, GPS_SV_MAXSATS_M8N);
-        // If we're receiving UBX-NAV-SAT messages, we detected a module M8 or newer.
-        // We can receive far more sats than we can handle for Configurator, which is the primary consumer for sat info.
-        // We're using the max for M8 (32) for our sizing, since Configurator only supports a max of 32 sats and we
-        // want to limit the payload buffer space used.
-        // We simply ignore any sats above that max, the down side is we may not see sats used for the solution, but
-        // the intent in Configurator is to see if sats are being acquired and their strength, so this is not an issue.
-        for (unsigned i = 0; i < ARRAYLEN(GPS_svinfo); i++) {
-            if (i < GPS_numCh) {
-                GPS_svinfo[i].chn = ubxRcvMsgPayload.ubxNavSat.svs[i].gnssId;
-                GPS_svinfo[i].svid = ubxRcvMsgPayload.ubxNavSat.svs[i].svId;
-                GPS_svinfo[i].cno = ubxRcvMsgPayload.ubxNavSat.svs[i].cno;
-                GPS_svinfo[i].quality = ubxRcvMsgPayload.ubxNavSat.svs[i].flags;
-            } else {
-                GPS_svinfo[i] = (GPS_svinfo_t){ .chn = 255 };
-            }
-        }
-
-        // Setting the number of channels higher than GPS_SV_MAXSATS_LEGACY is the only way to tell BF Configurator we're sending the
-        // enhanced sat list info without changing the MSP protocol. Also, we're sending the complete list each time even if it's empty, so
-        // BF Conf can erase old entries shown on screen when channels are removed from the list.
-        // TODO: GPS_numCh = MAX(GPS_numCh, GPS_SV_MAXSATS_LEGACY + 1);
-        GPS_numCh = GPS_SV_MAXSATS_M8N;
 #ifdef USE_DASHBOARD
         dashboardGpsNavSvInfoRcvCount++;
 #endif
@@ -2388,6 +2778,24 @@ static bool UBLOX_parse_gps(void)
 
 static bool gpsNewFrameUBLOX(uint8_t data)
 {
+    ubloxParsingAlmostDone = false;
+
+    // Fast path for payload content — this is the hot loop state, hit once per payload byte (up to 392 times for NAV-SAT).
+    // Handling it before the switch avoids the jump table lookup for the vast majority of bytes in a message.
+    if (ubxFrameParseState == UBX_PARSE_PAYLOAD_CONTENT) {
+        ubxRcvMsgChecksumB += (ubxRcvMsgChecksumA += data);   // Accumulate both checksums.
+        if (ubxFrameParsePayloadCounter < UBLOX_PAYLOAD_SIZE) {
+            // Only add bytes to the buffer if we haven't reached the max supported payload size.
+            // Note that we still read & checksum every byte so the checksum calculates correctly.
+            ubxRcvMsgPayload.rawBytes[ubxFrameParsePayloadCounter] = data;
+        }
+        if (++ubxFrameParsePayloadCounter >= ubxRcvMsgPayloadLength) {
+            // All bytes for payload length processed.
+            ubxFrameParseState = UBX_PARSE_CHECKSUM_A;
+        }
+        return false;
+    }
+
     bool newPositionDataReceived = false;
 
     switch (ubxFrameParseState) {
@@ -2453,23 +2861,13 @@ static bool gpsNewFrameUBLOX(uint8_t data)
         ubxFrameParseState = UBX_PARSE_PAYLOAD_CONTENT;
         break;
     case UBX_PARSE_PAYLOAD_CONTENT:
-        ubxRcvMsgChecksumB += (ubxRcvMsgChecksumA += data);   // Accumulate both checksums.
-        if (ubxFrameParsePayloadCounter < UBLOX_PAYLOAD_SIZE) {
-            // Only add bytes to the buffer if we haven't reached the max supported payload size.
-            // Note that we still read & checksum every byte so the checksum calculates correctly.
-            ubxRcvMsgPayload.rawBytes[ubxFrameParsePayloadCounter] = data;
-        }
-        if (++ubxFrameParsePayloadCounter >= ubxRcvMsgPayloadLength) {
-            // All bytes for payload length processed.
-            ubxFrameParseState = UBX_PARSE_CHECKSUM_A;
-            break;
-        }
-        // More payload content left, stay in this state.
+        // Handled by the fast path above; this case is unreachable but kept for enum completeness.
         break;
     case UBX_PARSE_CHECKSUM_A:
         if (ubxRcvMsgChecksumA == data) {
             // Checksum A matches, go on to checksum B.
             ubxFrameParseState = UBX_PARSE_CHECKSUM_B;
+            ubloxParsingAlmostDone = true;
             break;
         }
         // Bad checksum A, restart new message parsing.
@@ -2554,8 +2952,9 @@ bool gpsPassthrough(serialPort_t *gpsPassthroughPort)
     return true;
 }
 
-float GPS_cosLat = 1.0f;  // this is used to offset the shrinking longitude as we go towards the poles
-                          // longitude difference * scale is approximate distance in degrees
+static float GPS_cosLat = 1.0f;
+    // this is used to offset the shrinking longitude as we go towards the poles
+    // longitude difference * scale is approximate distance in degrees
 
 void GPS_calc_longitude_scaling(int32_t lat)
 {
@@ -2612,7 +3011,7 @@ void GPS_reset_home_position(void)
 // Get distance between two points in cm using spherical to Cartesian transform
 // One one latitude unit, or one longitude unit at the equator, equals 1.113195 cm.
 // Get bearing from pos1 to pos2, returns values with 0.01 degree precision
-void GPS_distance_cm_bearing(const gpsLocation_t *from, const gpsLocation_t* to, bool dist3d, uint32_t *pDist, int32_t *pBearing)
+void GPS_distance_cm_bearing(const gpsLocation_t *from, const gpsLocation_t *to, bool dist3d, uint32_t *pDist, int32_t *pBearing)
 {
     // TO DO : handle crossing the 180 degree meridian, as in `GPS_distance2d()`
     float dLat = (to->lat - from->lat) * EARTH_ANGLE_TO_CM;
@@ -2652,7 +3051,7 @@ static void GPS_calculateDistanceAndDirectionToHome(void)
 void GPS_distance2d(const gpsLocation_t *from, const gpsLocation_t *to, vector2_t *distance)
 {
     int32_t deltaLon = to->lon - from->lon;
-    // In case we crossed the 180° meridian:
+    // In case we crossed the 180° meridian
     const int32_t deg180 = 180 * GPS_DEGREES_DIVIDER; // number of integer longitude steps in 180 degrees
     if (deltaLon > deg180) {
         deltaLon -= deg180;  // 360 * GPS_DEGREES_DIVIDER overflows int32_t, so use 180 twice
@@ -2718,6 +3117,11 @@ float getGpsDataIntervalSeconds(void)
 float getGpsDataFrequencyHz(void)
 {
     return gpsDataFrequencyHz;
+}
+
+float getGpsCosLat(void)
+{
+    return GPS_cosLat; // note this scaling factor is set only when the home point is updated
 }
 
 baudRate_e getGpsPortActualBaudRateIndex(void)

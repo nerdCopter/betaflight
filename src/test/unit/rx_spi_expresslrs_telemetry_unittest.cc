@@ -29,6 +29,7 @@ extern "C" {
     #include "platform.h"
 
     #include "build/version.h"
+    #include "common/crc.h"
     #include "common/printf.h"
 
     #include "drivers/io.h"
@@ -52,6 +53,7 @@ extern "C" {
     #include "sensors/sensors.h"
     #include "sensors/acceleration.h"
     #include "sensors/barometer.h"
+    #include "sensors/compass.h"
 
     #include "config/config.h"
 
@@ -96,7 +98,7 @@ static void testSetDataToTransmit(uint8_t payloadSize, uint8_t *payload)
     setTelemetryDataToTransmit(payloadSize, payload);
 
     for (int j = 0; j <= maxPackageIndex; j++) {
-        nextPackageIndex = getCurrentTelemetryPayload(data);
+        nextPackageIndex = getCurrentTelemetryPayload(data, ELRS_TELEMETRY_BYTES_PER_CALL);
         if (j != maxPackageIndex) {
             EXPECT_EQ(1 + j, nextPackageIndex);
         } else {
@@ -224,9 +226,13 @@ TEST(RxSpiExpressLrsTelemetryUnitTest, TestFlightMode)
 }
 
 TEST(RxSpiExpressLrsTelemetryUnitTest, TestMspVersionRequest)
-{ 
+{
     uint8_t request[15] = {238, 12, 122, 200, 234, 48, 0, 1, 1, 0, 0, 0, 0, 128, 0};
-    uint8_t response[12] = {200, 10, 123, 234, 200, 48, 3, 1, 0, API_VERSION_MAJOR, API_VERSION_MINOR, 0x80};
+    uint8_t response[12] = {200, 10, 123, 234, 200, 48, 3, 1, 0, API_VERSION_MAJOR, API_VERSION_MINOR, 0};
+    // Last byte is the CRSF CRC-8 (poly 0xD5) over the frame bytes from the type byte
+    // through the last data byte (response[2..10]); compute it at runtime so this test
+    // does not need to be touched when API_VERSION_MAJOR or API_VERSION_MINOR change.
+    response[11] = crc8_dvb_s2_update(0, &response[2], 9);
     uint8_t data1[6] = {1, request[0], request[1], request[2], request[3], request[4]};
     uint8_t data2[6] = {2, request[5], request[6], request[7], request[8], request[9]};
     uint8_t data3[6] = {3, request[10], request[11], request[12], request[13], request[14]};
@@ -401,6 +407,7 @@ extern "C" {
     uint8_t stateFlags;
     uint16_t flightModeFlags;
     baro_t baro;
+    mag_t mag;
 
     uint32_t microsISR(void) {return 0; }
 
@@ -427,7 +434,6 @@ extern "C" {
     bool isBatteryVoltageConfigured(void) { return true; }
     bool isAmperageConfigured(void) { return true; }
 
-    const serialPortConfig_t *findSerialPortConfig(serialPortFunction_e) { return NULL;}
     serialPort_t *openSerialPort(serialPortIdentifier_e, serialPortFunction_e, serialReceiveCallbackPtr, void *, uint32_t, portMode_e, portOptions_e) { return NULL; }
     void serialWriteBuf(serialPort_t *, const uint8_t *, int) {}
 

@@ -45,54 +45,60 @@ static uint8_t spiRegisteredDeviceCount = 0;
 spiDevice_t spiDevice[SPIDEV_COUNT];
 busDevice_t spiBusDevice[SPIDEV_COUNT];
 
-SPIDevice spiDeviceByInstance(const SPI_TypeDef *instance)
+spiDevice_e spiDeviceByInstance(const spiResource_t *instance)
 {
 #ifdef USE_SPI_DEVICE_0
-    if (instance == SPI0) {
+    if (instance == (const spiResource_t *)SPI0) {
         return SPIDEV_0;
     }
 #endif
 
 #ifdef USE_SPI_DEVICE_1
-    if (instance == SPI1) {
+    if (instance == (const spiResource_t *)SPI1) {
         return SPIDEV_1;
     }
 #endif
 
 #ifdef USE_SPI_DEVICE_2
-    if (instance == SPI2) {
+    if (instance == (const spiResource_t *)SPI2) {
         return SPIDEV_2;
     }
 #endif
 
 #ifdef USE_SPI_DEVICE_3
-    if (instance == SPI3) {
+    if (instance == (const spiResource_t *)SPI3) {
         return SPIDEV_3;
     }
 #endif
 
 #ifdef USE_SPI_DEVICE_4
-    if (instance == SPI4) {
+    if (instance == (const spiResource_t *)SPI4) {
         return SPIDEV_4;
     }
 #endif
 
 #ifdef USE_SPI_DEVICE_5
-    if (instance == SPI5) {
+    if (instance == (const spiResource_t *)SPI5) {
         return SPIDEV_5;
     }
 #endif
 
 #ifdef USE_SPI_DEVICE_6
-    if (instance == SPI6) {
+    if (instance == (const spiResource_t *)SPI6) {
         return SPIDEV_6;
+    }
+#endif
+
+#ifdef USE_SPI_DEVICE_7
+    if (instance == (const spiResource_t *)SPI7) {
+        return SPIDEV_7;
     }
 #endif
 
     return SPIINVALID;
 }
 
-SPI_TypeDef *spiInstanceByDevice(SPIDevice device)
+spiResource_t *spiInstanceByDevice(spiDevice_e device)
 {
     if (device == SPIINVALID || device >= SPIDEV_COUNT) {
         return NULL;
@@ -101,7 +107,7 @@ SPI_TypeDef *spiInstanceByDevice(SPIDevice device)
     return spiDevice[device].dev;
 }
 
-bool spiInit(SPIDevice device)
+bool spiInit(spiDevice_e device)
 {
     switch (device) {
     case SPIINVALID:
@@ -128,6 +134,10 @@ bool spiInit(SPIDevice device)
 
 #if !defined(USE_SPI_DEVICE_6)
     case SPIDEV_6:
+#endif
+
+#if !defined(USE_SPI_DEVICE_7)
+    case SPIDEV_7:
 #endif
         return false;
     default:
@@ -414,8 +424,22 @@ uint8_t spiGetRegisteredDeviceCount(void)
     return spiRegisteredDeviceCount;
 }
 
+uint16_t spiGetErrorCounter(void)
+{
+    uint16_t errorCount = 0;
+
+    for (int device = 0; device < SPIDEV_COUNT; device++) {
+        errorCount += spiDevice[device].errorCount;
+    }
+
+    return errorCount;
+}
+
 uint8_t spiGetExtDeviceCount(const extDevice_t *dev)
 {
+    if (!dev || !dev->bus) {
+        return 0;
+    }
     return dev->bus->deviceCount;
 }
 
@@ -486,6 +510,42 @@ void spiSequence(const extDevice_t *dev, busSegment_t *segments)
     spiSequenceStart(dev);
 }
 
+void spiAbortTransfer(const extDevice_t *dev)
+{
+    busDevice_t *bus = dev->bus;
+    const extDevice_t *nextDev = NULL;
+
+    ATOMIC_BLOCK(NVIC_PRIO_MAX) {
+        if (!spiIsBusy(dev)) {
+            return;
+        }
+
+        spiInternalAbortDMA(dev);
+
+        IOHi(dev->busType_u.spi.csnPin);
+
+        spiDevice[bus - spiBusDevice].errorCount++;
+
+        busSegment_t *endSegment = (busSegment_t *)bus->curSegment;
+        while (endSegment->len) {
+            endSegment++;
+        }
+
+        nextDev = endSegment->u.link.dev;
+        if (nextDev) {
+            bus->curSegment = endSegment->u.link.segments;
+            endSegment->u.link.dev = NULL;
+            endSegment->u.link.segments = NULL;
+        } else {
+            bus->curSegment = (busSegment_t *)BUS_SPI_FREE;
+        }
+    }
+
+    if (nextDev) {
+        spiSequenceStart(nextDev);
+    }
+}
+
 // Process segments using DMA - expects DMA irq handler to have been set up to feed into spiIrqHandler.
 FAST_CODE void spiProcessSegmentsDMA(const extDevice_t *dev)
 {
@@ -515,6 +575,11 @@ FAST_IRQ_HANDLER void spiIrqHandler(const extDevice_t *dev)
 {
     busDevice_t *bus = dev->bus;
     busSegment_t *nextSegment;
+
+    // Captured before the callback, which rewinds curSegment to repeat a segment on BUS_BUSY. When
+    // the repeated segment is the first of the list that leaves curSegment pointing in front of the
+    // array, so negateCS can no longer be read from it once the callback has run.
+    const bool negateCS = bus->curSegment->negateCS;
 
     if (bus->curSegment->callback) {
         switch(bus->curSegment->callback(dev->callbackArg)) {
@@ -561,8 +626,6 @@ FAST_IRQ_HANDLER void spiIrqHandler(const extDevice_t *dev)
         }
     } else {
         // Do as much processing as possible before asserting CS to avoid violating minimum high time
-        bool negateCS = bus->curSegment->negateCS;
-
         bus->curSegment = nextSegment;
 
         // After the completion of the first segment setup the init structure for the subsequent segment

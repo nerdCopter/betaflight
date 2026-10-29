@@ -1,24 +1,63 @@
 
 CONFIGS_REPO_URL ?= https://github.com/betaflight/config
 # handle only this directory as config submodule
-CONFIGS_SUBMODULE_DIR = src/config
-BASE_CONFIGS      = $(sort $(notdir $(patsubst %/,%,$(dir $(wildcard $(CONFIG_DIR)/configs/*/config.h)))))
+CONFIGS_SUBMODULE_DIR := src/config
+# Configs live either flat (configs/<BOARD>/config.h) or grouped by manufacturer
+# (configs/<MANUFACTURER_ID>/<BOARD>/config.h). Both are accepted; the leaf
+# directory name is always the board name. The two globs never overlap because a
+# manufacturer directory holds board directories, not a config.h of its own.
+BASE_CONFIGS           = $(sort $(notdir $(patsubst %/,%,$(dir \
+                             $(wildcard $(CONFIG_DIR)/configs/*/config.h) \
+                             $(wildcard $(CONFIG_DIR)/configs/*/*/config.h)))))
 
-ifneq ($(filter-out %_sdk %_install test% %_clean clean% %-print %.hex %.h hex checks help configs $(BASE_TARGETS) $(BASE_CONFIGS),$(MAKECMDGOALS)),)
+ifneq ($(words $(CONFIG_DIR)),1)
+$(error CONFIG_DIR/BETAFLIGHT_CONFIG path contains whitespace; unsupported by GNU make wildcard.)
+endif
+
+# Config handling — only active when CONFIG= is set explicitly
+ifneq ($(CONFIG),)
+
 ifeq ($(wildcard $(CONFIG_DIR)/configs/),)
 $(error `$(CONFIG_DIR)` not found. Have you hydrated configuration using: 'make configs'?)
 endif
-endif
-
-ifneq ($(CONFIG),)
 
 ifneq ($(TARGET),)
 $(error TARGET or CONFIG should be specified. Not both.)
 endif
 
-CONFIG_HEADER_FILE  = $(CONFIG_DIR)/configs/$(CONFIG)/config.h
-CONFIG_SOURCE_FILE  = $(CONFIG_DIR)/configs/$(CONFIG)/config.c
-INCLUDE_DIRS       += $(CONFIG_DIR)/configs/$(CONFIG)
+# Locate the board's config directory, accepting a flat (configs/<BOARD>) or a
+# manufacturer-grouped (configs/<MANUFACTURER_ID>/<BOARD>) layout. A flat match
+# wins; otherwise search one manufacturer level down and reject only a grouped
+# name that resolves to more than one manufacturer.
+CONFIG_FLAT_MATCH  := $(wildcard $(CONFIG_DIR)/configs/$(CONFIG)/config.h)
+ifneq ($(CONFIG_FLAT_MATCH),)
+CONFIG_PATH        := $(patsubst %/,%,$(dir $(CONFIG_FLAT_MATCH)))
+else
+CONFIG_MATCHES     := $(wildcard $(CONFIG_DIR)/configs/*/$(CONFIG)/config.h)
+ifneq ($(word 2,$(CONFIG_MATCHES)),)
+$(error Ambiguous CONFIG '$(CONFIG)' matches multiple configs: $(CONFIG_MATCHES))
+endif
+CONFIG_PATH        := $(patsubst %/,%,$(dir $(firstword $(CONFIG_MATCHES))))
+endif
+ifeq ($(CONFIG_PATH),)
+$(error CONFIG '$(CONFIG)' not found under $(CONFIG_DIR)/configs (flat or <manufacturer>/<board>).)
+endif
+
+CONFIG_HEADER_FILE  = $(CONFIG_PATH)/config.h
+CONFIG_SOURCE_FILE  = $(CONFIG_PATH)/config.c
+INCLUDE_DIRS       += $(CONFIG_PATH)
+
+# include the config's config.mk if it exists
+-include $(CONFIG_PATH)/config.mk
+
+# OCTOSPI_FLASH_CHIP selects the flash chip wired to the OCTOSPI/XSPI peripheral.
+# Set in per-config config.mk (e.g. OCTOSPI_FLASH_CHIP := MX66UW1G45G). Emits both
+# USE_FLASH_<chip> (chip driver gating) and OCTOSPI_FLASH_CHIP_<chip> (build-time
+# selection marker for chips that cannot be probed via JEDEC RDID, such as those
+# operating in 8-line OPI mode).
+ifneq ($(OCTOSPI_FLASH_CHIP),)
+TARGET_FLAGS += -DUSE_FLASH_$(OCTOSPI_FLASH_CHIP) -DOCTOSPI_FLASH_CHIP_$(OCTOSPI_FLASH_CHIP)
+endif
 
 ifneq ($(wildcard $(CONFIG_HEADER_FILE)),)
 
@@ -29,23 +68,29 @@ TARGET_FLAGS += -DUSE_CONFIG_SOURCE
 endif
 
 CONFIG_REVISION := norevision
-ifeq ($(shell git -C $(CONFIG_DIR) diff --shortstat),)
-CONFIG_REVISION := $(shell git -C $(CONFIG_DIR) log -1 --format="%h")
+ifeq ($(shell git -C "$(CONFIG_DIR)" rev-parse --is-inside-work-tree 2>/dev/null),true)
+ifeq ($(strip $(shell git -C "$(CONFIG_DIR)" status --porcelain -uno 2>/dev/null)),)
+CONFIG_REVISION := $(shell git -C "$(CONFIG_DIR)" rev-parse --short=7 HEAD 2>/dev/null)
 CONFIG_REVISION_DEFINE := -D'__CONFIG_REVISION__="$(CONFIG_REVISION)"'
 endif
+endif
 
-HSE_VALUE_MHZ := $(shell sed -E -n "/^[[:space:]]*\#[[:space:]]*define[[:space:]]+SYSTEM_HSE_MHZ[[:space:]]+([0-9]+).*/s//\1/p" $(CONFIG_HEADER_FILE))
-ifneq ($(HSE_VALUE_MHZ),)
+# Extract constants from $(CONFIG_HEADER_FILE) via preprocessor expansion
+# Oscillator frequency (MHz) -> Hz
+HSE_VALUE_MHZ := $(call pp_def_value,$(CONFIG_HEADER_FILE),SYSTEM_HSE_MHZ)
+ifneq ($(strip $(HSE_VALUE_MHZ)),)
 HSE_VALUE     := $(shell echo $$(( $(HSE_VALUE_MHZ) * 1000000 )) )
 endif
 
-TARGET        := $(shell sed -E -n "/^[[:space:]]*\#[[:space:]]*define[[:space:]]+FC_TARGET_MCU[[:space:]]+([[:alnum:]_]+).*/s//\1/p" $(CONFIG_HEADER_FILE))
-ifeq ($(TARGET),)
+# MCU target from config header
+TARGET        := $(call pp_def_value,$(CONFIG_HEADER_FILE),FC_TARGET_MCU)
+ifeq ($(strip $(TARGET)),)
 $(error No TARGET identified. Is the $(CONFIG_HEADER_FILE) valid for $(CONFIG)?)
 endif
 
-EXST_ADJUST_VMA := $(shell sed -E -n "/^[[:space:]]*\#[[:space:]]*define[[:space:]]+FC_VMA_ADDRESS[[:space:]]+((0[xX])?[[:xdigit:]]+).*/s//\1/p" $(CONFIG_HEADER_FILE))
-ifneq ($(EXST_ADJUST_VMA),)
+# Optional EXST address adjustment
+EXST_ADJUST_VMA := $(call pp_def_value,$(CONFIG_HEADER_FILE),FC_VMA_ADDRESS)
+ifneq ($(strip $(EXST_ADJUST_VMA)),)
 EXST = yes
 endif
 
@@ -56,16 +101,16 @@ endif #config
 
 .PHONY: configs
 configs:
-ifeq ($(shell realpath $(CONFIG_DIR)),$(shell realpath $(CONFIGS_SUBMODULE_DIR)))
+ifeq ($(shell realpath "$(CONFIG_DIR)"),$(shell realpath "$(CONFIGS_SUBMODULE_DIR)"))
 	@echo "Updating config submodule: $(CONFIGS_SUBMODULE_DIR)"
-	$(V1) git submodule update --init -- $(CONFIGS_SUBMODULE_DIR) || { echo "Config submodule update failed. Please check your git configuration."; exit 1; }
+	$(V1) git submodule update --init -- "$(CONFIGS_SUBMODULE_DIR)" || { echo "Config submodule update failed. Please check your git configuration."; exit 1; }
 	@echo "Submodule update succeeded."
 else
 ifeq ($(wildcard $(CONFIG_DIR)),)
 	@echo "Hydrating clone for configs: $(CONFIG_DIR)"
-	$(V1) git clone $(CONFIGS_REPO_URL) $(CONFIG_DIR)
+	$(V1) git clone --depth=1 $(CONFIGS_REPO_URL) "$(CONFIG_DIR)"
 else
-	$(V1) git -C $(CONFIG_DIR) pull origin
+	$(V1) git -C "$(CONFIG_DIR)" pull --ff-only origin
 endif
 endif
 
@@ -77,3 +122,15 @@ $(BASE_CONFIGS):
 ## <CONFIG>_rev    : build configured target and add revision to filename
 $(addsuffix _rev,$(BASE_CONFIGS)):
 	$(V0) $(MAKE) fwo CONFIG=$(subst _rev,,$@) REV=yes
+
+# When configs are not hydrated, BASE_CONFIGS is empty so config targets
+# have no recipe. Override Make's default "No rule" error with a helpful message
+# but only for targets explicitly requested on the command line.
+ifeq ($(wildcard $(CONFIG_DIR)/configs/),)
+.DEFAULT:
+	@if echo " $(MAKECMDGOALS) " | grep -q " $@ "; then \
+		echo "*** No rule to make target '$@'. If this is a configuration target, run 'make configs' first." >&2; \
+		exit 1; \
+	fi
+endif
+

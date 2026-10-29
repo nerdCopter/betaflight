@@ -23,8 +23,8 @@
  * WARNING: This is an auto-generated file, please do not edit directly!
  *
  * Generator    : `src/utils/make-build-info.py`
- * Source       : https://build.betaflight.com/api/options/4.6.0
- * Input hash   : f612c38bb1cde0c284a8e23af1eb2049
+ * Source       : https://build.betaflight.com/api/options/2026.12
+ * Input hash   : ec29b3428a61184bf200bff590fc476f
  */
 
 #include <stdint.h>
@@ -35,9 +35,7 @@
 
 #include "msp/msp_build_info.h"
 
-void sbufWriteBuildInfoFlags(sbuf_t *dst)
-{
-    static const uint16_t options[] = {
+static const uint16_t buildOptions[] = {
 #ifdef USE_SERIALRX_CRSF
         BUILD_OPTION_SERIALRX_CRSF,
 #endif
@@ -52,6 +50,9 @@ void sbufWriteBuildInfoFlags(sbuf_t *dst)
 #endif
 #ifdef USE_SERIALRX_JETIEXBUS
         BUILD_OPTION_SERIALRX_JETIEXBUS,
+#endif
+#ifdef USE_SERIALRX_MAVLINK
+        BUILD_OPTION_SERIALRX_MAVLINK,
 #endif
 #ifdef USE_RX_PPM
         BUILD_OPTION_RX_PPM,
@@ -116,11 +117,17 @@ void sbufWriteBuildInfoFlags(sbuf_t *dst)
 #ifdef USE_DASHBOARD
         BUILD_OPTION_DASHBOARD,
 #endif
+#ifdef USE_DRONECAN
+        BUILD_OPTION_DRONECAN,
+#endif
 #ifdef USE_EMFAT_TOOLS
         BUILD_OPTION_EMFAT_TOOLS,
 #endif
 #ifdef USE_ESCSERIAL_SIMONK
         BUILD_OPTION_ESCSERIAL_SIMONK,
+#endif
+#ifdef USE_FLIGHT_PLAN
+        BUILD_OPTION_FLIGHT_PLAN,
 #endif
 #ifdef USE_GPS
         BUILD_OPTION_GPS,
@@ -134,6 +141,9 @@ void sbufWriteBuildInfoFlags(sbuf_t *dst)
 #ifdef USE_MAG
         BUILD_OPTION_MAG,
 #endif
+#ifdef USE_OPTICALFLOW
+        BUILD_OPTION_OPTICALFLOW,
+#endif
 #ifdef USE_OSD_SD
         BUILD_OPTION_OSD_SD,
 #endif
@@ -146,11 +156,17 @@ void sbufWriteBuildInfoFlags(sbuf_t *dst)
 #ifdef USE_PINIO
         BUILD_OPTION_PINIO,
 #endif
+#ifdef USE_PITOT
+        BUILD_OPTION_PITOT,
+#endif
 #ifdef USE_POSITION_HOLD
         BUILD_OPTION_POSITION_HOLD,
 #endif
 #ifdef USE_RACE_PRO
         BUILD_OPTION_RACE_PRO,
+#endif
+#ifdef USE_RANGEFINDER
+        BUILD_OPTION_RANGEFINDER,
 #endif
 #ifdef USE_SOFTSERIAL
         BUILD_OPTION_SOFTSERIAL,
@@ -167,6 +183,9 @@ void sbufWriteBuildInfoFlags(sbuf_t *dst)
 #ifdef USE_BRUSHED
         BUILD_OPTION_BRUSHED,
 #endif
+#ifdef USE_DRONECAN_ESC
+        BUILD_OPTION_DRONECAN_ESC,
+#endif
 #ifdef USE_DSHOT
         BUILD_OPTION_DSHOT,
 #endif
@@ -182,10 +201,17 @@ void sbufWriteBuildInfoFlags(sbuf_t *dst)
 #ifdef USE_PWM_OUTPUT
         BUILD_OPTION_PWM_OUTPUT,
 #endif
-    };
+};
 
-    for (unsigned i = 0; i < ARRAYLEN(options); i++)
-    {
-        sbufWriteU16(dst, options[i]);
+void sbufWriteBuildInfoFlags(sbuf_t *dst)
+{
+    for (unsigned i = 0; i < ARRAYLEN(buildOptions); i++) {
+        sbufWriteU16(dst, buildOptions[i]);
     }
+}
+
+const uint16_t *getBuildOptions(unsigned *count)
+{
+    *count = ARRAYLEN(buildOptions);
+    return buildOptions;
 }

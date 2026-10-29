@@ -40,8 +40,24 @@
 
 #include "drivers/opticalflow/opticalflow.h"
 
+// See https://github.com/micoair/MTF-01_USER_MANUAL
+
 #define MT_OPTICALFLOW_MIN_RANGE 80  // mm
 #define MT_OPFLOW_MIN_QUALITY_THRESHOLD 30
+// Sensor latency: a flow sample reports motion from this long ago (integration
+// window, image processing and transport), so the rotation compensation uses a
+// gyro reading of that age. It is a property of the sensor pipeline, so it is
+// an absolute time rather than a count of frames or samples, which would make
+// it depend on the rate the device or the flow task happens to run at. One gyro
+// reading is kept per flow sample, so the history spans
+// MT_OPFLOW_GYRO_DELAY_US / frame period entries.
+// Measured on an MTF01 by correlating the reported flow against gyro over
+// rotation-only moves: the best fit is a 40ms integration window ending 45ms
+// before the sample is delivered, i.e. a 65ms centroid, on both axes.
+#define MT_OPFLOW_GYRO_DELAY_US 65000
+
+// Correct scaling of the flow requires multiplication of the scale factor by 2
+#define MTF01_OPTICAL_FLOW_SCALE (2 * 100.0f) // Flow rate is at 100cm
 
 static opticalflowData_t opticalflowSensorData = {0};
 
@@ -147,27 +163,44 @@ bool mtOpticalflowDetect(opticalflowDev_t * dev, rangefinderType_e mtRangefinder
     dev->delayMs = deviceConf->delayMs;
     dev->minRangeCm = MT_OPTICALFLOW_MIN_RANGE;
     dev->minQualityThreshold = MT_OPFLOW_MIN_QUALITY_THRESHOLD;
+    dev->gyroDelayUs = MT_OPFLOW_GYRO_DELAY_US;
 
     dev->init   = &mtOpticalflowInit;
     dev->update = &mtOpticalflowUpdate;
     dev->read   = &mtOpticalflowGetData;
-    
+
     return true;
 }
 
 void mtOpticalflowReceiveNewData(const uint8_t * bufferPtr) {
     const mtRangefinderData_t * latestRangefinderData = getMTRangefinderData();
-    
+
     const mtOpticalflowDataMessage_t * pkt = (const mtOpticalflowDataMessage_t *)bufferPtr;
-    
-    opticalflowSensorData.timeStampUs = micros();
-    opticalflowSensorData.flowRate.x  = (float)pkt->motionX / 1000.0f; 
-    opticalflowSensorData.flowRate.y  = (float)pkt->motionY / 1000.0f;
-    opticalflowSensorData.quality     = pkt->quality * 100 / 255;
-    
-    if (latestRangefinderData->distanceMm < MT_OPTICALFLOW_MIN_RANGE) {
+    const timeUs_t curTime = micros();
+    const float dt_s = (float)(curTime - opticalflowSensorData.timeStampUs) / 1e6f;
+
+    const bool dtValid = (dt_s > 0.0f && dt_s < 1.0f);
+    const bool rangeValid = (latestRangefinderData->distanceMm >= MT_OPTICALFLOW_MIN_RANGE);
+    const bool rfFresh = (cmp32(curTime, latestRangefinderData->timestampUs) <= (5000 * deviceConf->delayMs));
+
+    opticalflowSensorData.timeStampUs = curTime;
+    opticalflowSensorData.flowDtValid = dtValid;
+    opticalflowSensorData.rangeValid  = rangeValid && rfFresh;
+    opticalflowSensorData.flowValid   = dtValid;
+
+    if (dtValid) {
+        opticalflowSensorData.flowRate.x = (float)pkt->motionX / MTF01_OPTICAL_FLOW_SCALE / dt_s;
+        opticalflowSensorData.flowRate.y = (float)pkt->motionY / MTF01_OPTICAL_FLOW_SCALE / dt_s;
+        opticalflowSensorData.quality    = pkt->quality * 100 / 255;
+    } else {
+        opticalflowSensorData.flowRate.x = 0;
+        opticalflowSensorData.flowRate.y = 0;
+        opticalflowSensorData.quality    = 0;
+    }
+
+    if (!rangeValid) {
         opticalflowSensorData.quality = OPTICALFLOW_OUT_OF_RANGE;
-    } else if (cmp32(micros(), latestRangefinderData->timestampUs) > (5000 * deviceConf->delayMs)) {   // 5 updates missing
+    } else if (!rfFresh) {
         opticalflowSensorData.quality = OPTICALFLOW_HARDWARE_FAILURE;
     }
 }

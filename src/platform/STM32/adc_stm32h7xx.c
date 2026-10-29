@@ -29,6 +29,7 @@
 #include "build/debug.h"
 
 #include "drivers/dma_reqmap.h"
+#include "platform/dma.h"
 #include "drivers/io.h"
 #include "drivers/io_impl.h"
 #include "platform/rcc.h"
@@ -38,7 +39,7 @@
 #include "drivers/sensor.h"
 
 #include "drivers/adc.h"
-#include "drivers/adc_impl.h"
+#include "platform/adc_impl.h"
 
 #include "pg/adc.h"
 
@@ -84,7 +85,7 @@ const adcDevice_t adcHardware[ADCDEV_COUNT] = {
 
 adcDevice_t adcDevice[ADCDEV_COUNT];
 
-#if defined(STM32H743xx) || defined(STM32H750xx) || defined(STM32H723xx) || defined(STM32H725xx) || defined(STM32H730xx)
+#if defined(STM32H743xx) || defined(STM32H750xx) || defined(STM32H723xx) || defined(STM32H725xx) || defined(STM32H730xx) || defined(STM32H735xx) || defined(STM32H753xx) || defined(STM32H757xx)
 #define ADC_DEVICE_FOR_INTERNAL ADC_DEVICES_3
 #elif defined(STM32H7A3xx) || defined(STM32H7A3xxQ)
 #define ADC_DEVICE_FOR_INTERNAL ADC_DEVICES_2
@@ -101,11 +102,11 @@ const adcTagMap_t adcTagMap[] = {
 #define ADC_TAG_MAP_TEMPSENSOR 1
 #define ADC_TAG_MAP_VBAT4      2
 
-#if defined(STM32H723xx) || defined(STM32H725xx) || defined(STM32H730xx) // RM0468 Rev 2 Table 240. ADC interconnection
+#if defined(STM32H723xx) || defined(STM32H725xx) || defined(STM32H730xx)  || defined(STM32H735xx) // RM0468 Rev 2 Table 240. ADC interconnection
     { DEFIO_TAG_E__NONE, ADC_DEVICE_FOR_INTERNAL,   ADC_CHANNEL_VREFINT,    18 }, // 18 VREFINT
     { DEFIO_TAG_E__NONE, ADC_DEVICE_FOR_INTERNAL,   ADC_CHANNEL_TEMPSENSOR, 17 }, // 17 VSENSE
     { DEFIO_TAG_E__NONE, ADC_DEVICE_FOR_INTERNAL,   ADC_CHANNEL_VBAT,       16 }, // 16 VBAT/4
-#elif defined(STM32H743xx) || defined(STM32H750xx) // RM0433 Rev 7 Table 205. ADC interconnection
+#elif defined(STM32H743xx) || defined(STM32H750xx) || defined(STM32H753xx) || defined(STM32H757xx) // RM0433 Rev 7 Table 205. ADC interconnection
     { DEFIO_TAG_E__NONE, ADC_DEVICE_FOR_INTERNAL,   ADC_CHANNEL_VREFINT,    19 }, // 19 VREFINT
     { DEFIO_TAG_E__NONE, ADC_DEVICE_FOR_INTERNAL,   ADC_CHANNEL_TEMPSENSOR, 18 }, // 18 VSENSE
     { DEFIO_TAG_E__NONE, ADC_DEVICE_FOR_INTERNAL,   ADC_CHANNEL_VBAT,       17 }, // 17 VBAT/4
@@ -143,6 +144,7 @@ const adcTagMap_t adcTagMap[] = {
     { DEFIO_TAG_E__PA5,  ADC_DEVICES_12,  ADC_CHANNEL_19, 19 },
     { DEFIO_TAG_E__PA6,  ADC_DEVICES_12,  ADC_CHANNEL_3,   3 },
     { DEFIO_TAG_E__PA7,  ADC_DEVICES_12,  ADC_CHANNEL_7,   7 },
+    { DEFIO_TAG_E__PF11, ADC_DEVICES_1,   ADC_CHANNEL_2,   2 },
 
 #if 0
     // Inputs available for packages larger than LQFP144
@@ -154,7 +156,6 @@ const adcTagMap_t adcTagMap[] = {
     { DEFIO_TAG_E__PF8,  ADC_DEVICES_3,   ADC_CHANNEL_7,   7 },
     { DEFIO_TAG_E__PF9,  ADC_DEVICES_3,   ADC_CHANNEL_2,   2 },
     { DEFIO_TAG_E__PF10, ADC_DEVICES_3,   ADC_CHANNEL_6,   6 },
-    { DEFIO_TAG_E__PF11, ADC_DEVICES_1,   ADC_CHANNEL_2,   2 },
     { DEFIO_TAG_E__PF12, ADC_DEVICES_1,   ADC_CHANNEL_6,   6 },
     { DEFIO_TAG_E__PF13, ADC_DEVICES_2,   ADC_CHANNEL_2,   2 },
     { DEFIO_TAG_E__PF14, ADC_DEVICES_2,   ADC_CHANNEL_6,   6 },
@@ -214,15 +215,14 @@ static void adcInitDevice(adcDevice_t *adcdev, int channelCount)
 
     // Enable circular DMA.
     // ADC3 of H72X and H73X has a special way of doing this.
-#if defined(STM32H723xx) || defined(STM32H725xx) || defined(STM32H730xx)
+#if defined(STM32H723xx) || defined(STM32H725xx) || defined(STM32H730xx) || defined(STM32H735xx)
     if (adcdev->ADCx == ADC3) {
         hadc->Init.DMAContinuousRequests = ENABLE;
     } else
-#else
+#endif
     {
         hadc->Init.ConversionDataManagement = ADC_CONVERSIONDATA_DMA_CIRCULAR;
     }
-#endif
 
     hadc->Init.Overrun                  = ADC_OVR_DATA_OVERWRITTEN;
     hadc->Init.OversamplingMode         = DISABLE;
@@ -250,16 +250,17 @@ static int adcFindTagMapEntry(ioTag_t tag)
     return -1;
 }
 
-// H743, H750 and H7A3 seems to use 16-bit precision value,
-// while H723, H725 and H730 seems to use 12-bit precision value.
-#if defined(STM32H743xx) || defined(STM32H750xx) || defined(STM32H7A3xx) || defined(STM32H7A3xxQ)
+// H743, H750, H757 and H7A3 use a 16-bit precision value,
+// while H723, H725, H730 and H735 use a 12-bit precision value.
+#if defined(STM32H743xx) || defined(STM32H750xx) || defined(STM32H7A3xx) || defined(STM32H7A3xxQ) || defined(STM32H753xx) || defined(STM32H757xx)
 #define VREFINT_CAL_SHIFT 4
-#elif defined(STM32H723xx) || defined(STM32H725xx) || defined(STM32H730xx)
+#elif defined(STM32H723xx) || defined(STM32H725xx) || defined(STM32H730xx) || defined(STM32H735xx)
 #define VREFINT_CAL_SHIFT 0
 #else
 #error Unknown MCU
 #endif
 
+#if defined(USE_ADC_INTERNAL)
 static void adcInitCalibrationValues(void)
 {
     adcVREFINTCAL = *VREFINT_CAL_ADDR >> VREFINT_CAL_SHIFT;
@@ -267,12 +268,13 @@ static void adcInitCalibrationValues(void)
     adcTSCAL2 = *TEMPSENSOR_CAL2_ADDR >> VREFINT_CAL_SHIFT;
     adcTSSlopeK = (TEMPSENSOR_CAL2_TEMP - TEMPSENSOR_CAL1_TEMP) * 1000 / (adcTSCAL2 - adcTSCAL1);
 }
+#endif
 
 // ADC conversion result DMA buffer
 // Need this separate from the main adcValue[] array, because channels are numbered
 // by ADC instance order that is different from ADC_xxx numbering.
 
-#define ADC_BUF_LENGTH ADC_CHANNEL_COUNT
+#define ADC_BUF_LENGTH ADC_SOURCE_COUNT
 #define ADC_BUF_BYTES (ADC_BUF_LENGTH * sizeof(uint16_t))
 #define ADC_BUF_CACHE_ALIGN_BYTES  ((ADC_BUF_BYTES + 0x20) & ~0x1f)
 #define ADC_BUF_CACHE_ALIGN_LENGTH (ADC_BUF_CACHE_ALIGN_BYTES / sizeof(uint16_t))
@@ -308,27 +310,37 @@ void adcInit(const adcConfig_t *config)
     adcInitCalibrationValues();
 #endif
 
-    for (int i = 0; i < ADC_CHANNEL_COUNT; i++) {
-        int map;
-        int dev;
+    for (unsigned i = 0; i < ADC_SOURCE_COUNT; i++) {
+        int map = -1;
+        int dev = -1;
 
 #ifdef USE_ADC_INTERNAL
-        if (i == ADC_TEMPSENSOR) {
-            map = ADC_TAG_MAP_TEMPSENSOR;
-            dev = ffs(adcTagMap[map].devices) - 1;
-        } else if (i == ADC_VREFINT) {
-            map = ADC_TAG_MAP_VREFINT;
-            dev = ffs(adcTagMap[map].devices) - 1;
-        } else if (i == ADC_VBAT4) {
-            map = ADC_TAG_MAP_VBAT4;
-            dev = ffs(adcTagMap[map].devices) - 1;
-        } else {
-#else
-        {
+        if (i >= ADC_EXTERNAL_COUNT) {
+            switch(i) {
+            case ADC_TEMPSENSOR:
+                map = ADC_TAG_MAP_TEMPSENSOR;
+                break;
+            case ADC_VREFINT:
+                map = ADC_TAG_MAP_VREFINT;
+                break;
+#if ADC_INTERNAL_VBAT4_ENABLED
+            case ADC_VBAT4:
+                map = ADC_TAG_MAP_VBAT4;
+                break;
 #endif
+            default:
+                // Unknown internal source; skip to avoid using an uninitialized map
+                continue;
+            }
+            dev = ffs(adcTagMap[map].devices) - 1;
+            if (dev < 0) { continue; }
+            adcOperatingConfig[i].sampleTime = ADC_SAMPLETIME_810CYCLES_5;
+        }
+#endif
+        if (i < ADC_EXTERNAL_COUNT) {
             dev = ADC_CFG_TO_DEV(adcOperatingConfig[i].adcDevice);
 
-            if (!adcOperatingConfig[i].tag) {
+            if (dev < 0 || !adcOperatingConfig[i].tag) {
                 continue;
             }
 
@@ -336,6 +348,8 @@ void adcInit(const adcConfig_t *config)
             if (map < 0) {
                 continue;
             }
+
+            adcOperatingConfig[i].sampleTime = ADC_SAMPLETIME_387CYCLES_5;
 
             // Found a tag map entry for this input pin
             // Find an ADC device that can handle this input pin
@@ -346,14 +360,23 @@ void adcInit(const adcConfig_t *config)
                 // If the ADC was configured to use a specific device, but that device was not active, then try and find another active instance that works for the pin.
 
                 for (dev = 0; dev < ADCDEV_COUNT; dev++) {
-                    if (!adcDevice[dev].ADCx
-#ifndef USE_DMA_SPEC
-                        || !adcDevice[dev].dmaResource
-#endif
-                    ) {
+                    if (!adcDevice[dev].ADCx) {
                         // Instance not activated
                         continue;
                     }
+
+#ifdef USE_DMA_SPEC
+                    // check that there is a valid spec for this dev
+                    const dmaChannelSpec_t *spec = dmaGetChannelSpecByPeripheral(DMA_PERIPH_ADC, dev, config->dmaopt[dev]);
+                    if (!spec) {
+                        continue;
+                    }
+#else
+                    if (!adcDevice[dev].dmaResource) {
+                        continue;
+                    }
+#endif
+
                     if (adcTagMap[map].devices & (1 << dev)) {
                         // Found an activated ADC instance for this input pin
                         break;
@@ -371,7 +394,6 @@ void adcInit(const adcConfig_t *config)
 
         adcOperatingConfig[i].adcDevice = dev;
         adcOperatingConfig[i].adcChannel = adcTagMap[map].channel;
-        adcOperatingConfig[i].sampleTime = ADC_SAMPLETIME_810CYCLES_5;
         adcOperatingConfig[i].enabled = true;
 
         adcDevice[dev].channelBits |= (1 << adcTagMap[map].channelOrdinal);
@@ -432,7 +454,7 @@ void adcInit(const adcConfig_t *config)
 
         int rank = 0;
 
-        for (int adcChan = 0; adcChan < ADC_CHANNEL_COUNT; adcChan++) {
+        for (int adcChan = 0; adcChan < ADC_SOURCE_COUNT; adcChan++) {
 
             if (!adcOperatingConfig[adcChan].enabled) {
                 continue;
@@ -446,12 +468,12 @@ void adcInit(const adcConfig_t *config)
 
             ADC_ChannelConfTypeDef sConfig;
 
-            sConfig.Channel      = adcOperatingConfig[adcChan].adcChannel; /* Sampled channel number */
-            sConfig.Rank         = adcRegularRankMap[rank++];   /* Rank of sampled channel number ADCx_CHANNEL */
-            sConfig.SamplingTime = ADC_SAMPLETIME_387CYCLES_5;  /* Sampling time (number of clock cycles unit) */
-            sConfig.SingleDiff   = ADC_SINGLE_ENDED;            /* Single-ended input channel */
-            sConfig.OffsetNumber = ADC_OFFSET_NONE;             /* No offset subtraction */
-            sConfig.Offset = 0;                                 /* Parameter discarded because offset correction is disabled */
+            sConfig.Channel      = adcOperatingConfig[adcChan].adcChannel;  /* Sampled channel number */
+            sConfig.Rank         = adcRegularRankMap[rank++];               /* Rank of sampled channel number ADCx_CHANNEL */
+            sConfig.SamplingTime = adcOperatingConfig[adcChan].sampleTime;  /* Sampling time (number of clock cycles unit) */
+            sConfig.SingleDiff   = ADC_SINGLE_ENDED;                        /* Single-ended input channel */
+            sConfig.OffsetNumber = ADC_OFFSET_NONE;                         /* No offset subtraction */
+            sConfig.Offset = 0;                                             /* Parameter discarded because offset correction is disabled */
 
             if (HAL_ADC_ConfigChannel(&adc->ADCHandle, &sConfig) != HAL_OK) {
                 errorHandler();
@@ -541,7 +563,7 @@ void adcGetChannelValues(void)
 {
     // Transfer values in conversion buffer into adcValues[]
     SCB_InvalidateDCache_by_Addr((uint32_t*)adcConversionBuffer, ADC_BUF_CACHE_ALIGN_BYTES);
-    for (int i = 0; i < ADC_CHANNEL_INTERNAL_FIRST_ID; i++) {
+    for (unsigned i = 0; i < ADC_EXTERNAL_COUNT; i++) {
         if (adcOperatingConfig[i].enabled) {
             adcValues[adcOperatingConfig[i].dmaIndex] = adcConversionBuffer[adcOperatingConfig[i].dmaIndex];
         }
@@ -560,23 +582,19 @@ void adcInternalStartConversion(void)
     return;
 }
 
-static uint16_t adcInternalRead(int channel)
+uint16_t adcInternalRead(adcSource_e source)
 {
-    int dmaIndex = adcOperatingConfig[channel].dmaIndex;
-
-    return adcConversionBuffer[dmaIndex];
-}
-
-uint16_t adcInternalReadVrefint(void)
-{
-    uint16_t value = adcInternalRead(ADC_VREFINT);
-    return value;
-}
-
-uint16_t adcInternalReadTempsensor(void)
-{
-    uint16_t value = adcInternalRead(ADC_TEMPSENSOR);
-    return value;
+    switch (source) {
+    case ADC_VREFINT:
+    case ADC_TEMPSENSOR:
+#if ADC_INTERNAL_VBAT4_ENABLED
+    case ADC_VBAT4:
+#endif
+        const unsigned dmaIndex = adcOperatingConfig[source].dmaIndex;
+        return dmaIndex < ADC_BUF_LENGTH ? adcConversionBuffer[dmaIndex] : 0;
+    default:
+        return 0;
+    }
 }
 #endif // USE_ADC_INTERNAL
 

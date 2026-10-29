@@ -22,22 +22,27 @@
 
 #pragma once
 
+#include <stdint.h>
+
 #include "platform.h"
+#include "drivers/bus_quadspi.h"
 
 #if PLATFORM_TRAIT_RCC
 #include "platform/rcc_types.h"
 #endif
 
+#define BUS_QSPI_FREE   0x0
+
 typedef struct quadSpiPinDef_s {
     ioTag_t pin;
-#if QUADSPI_TRAIT_AF_PIN
+#if SPI_TRAIT_AF_PIN
     uint8_t af;
 #endif
 } quadSpiPinDef_t;
 
 typedef struct quadSpiHardware_s {
-    QUADSPIDevice device;
-    QUADSPI_TypeDef *reg;
+    quadSpiDevice_e device;
+    quadSpiResource_t *reg;
     quadSpiPinDef_t clkPins[MAX_QUADSPI_PIN_SEL];
     quadSpiPinDef_t bk1IO0Pins[MAX_QUADSPI_PIN_SEL];
     quadSpiPinDef_t bk1IO1Pins[MAX_QUADSPI_PIN_SEL];
@@ -57,8 +62,8 @@ typedef struct quadSpiHardware_s {
 
 extern const quadSpiHardware_t quadSpiHardware[];
 
-typedef struct QUADSPIDevice_s {
-    QUADSPI_TypeDef *dev;
+typedef struct quadSpiDevice_s {
+    quadSpiResource_t *dev;
     ioTag_t clk;
     ioTag_t bk1IO0;
     ioTag_t bk1IO1;
@@ -70,7 +75,8 @@ typedef struct QUADSPIDevice_s {
     ioTag_t bk2IO2;
     ioTag_t bk2IO3;
     ioTag_t bk2CS;
-#if defined(STM32H7)
+#if SPI_TRAIT_AF_PIN
+    uint8_t clkAF;
     uint8_t bk1IO0AF;
     uint8_t bk1IO1AF;
     uint8_t bk1IO2AF;
@@ -87,12 +93,12 @@ typedef struct QUADSPIDevice_s {
     rccPeriphTag_t rcc;
 #endif
     volatile uint16_t errorCount;
-#if QUADSPI_TRAIT_HANDLE
-    QSPI_HandleTypeDef hquadSpi;
+#if QSPI_TRAIT_HANDLE
+    qspiHalHandle_t *halHandle;
 #endif
 } quadSpiDevice_t;
 
 extern quadSpiDevice_t quadSpiDevice[QUADSPIDEV_COUNT];
 
-void quadSpiInitDevice(QUADSPIDevice device);
-uint32_t quadSpiTimeoutUserCallback(QUADSPI_TypeDef *instance);
+void quadSpiInitDevice(quadSpiDevice_e device);
+uint32_t quadSpiTimeoutUserCallback(quadSpiResource_t *instance);

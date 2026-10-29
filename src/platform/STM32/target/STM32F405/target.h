@@ -21,11 +21,7 @@
 #pragma once
 
 #ifndef TARGET_BOARD_IDENTIFIER
-#define TARGET_BOARD_IDENTIFIER "S405"
-#endif
-
-#ifndef USBD_PRODUCT_STRING
-#define USBD_PRODUCT_STRING     "Betaflight STM32F405"
+#define TARGET_BOARD_IDENTIFIER "F405"
 #endif
 
 #ifndef STM32F405

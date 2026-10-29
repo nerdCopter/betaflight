@@ -26,7 +26,7 @@
 #include "common/filter.h"
 #include "pg/pg.h"
 
-typedef enum rc_alias {
+typedef enum {
     ROLL = 0,
     PITCH,
     YAW,
@@ -75,6 +75,22 @@ typedef enum {
 
 #define CONTROL_RATE_CONFIG_RC_EXPO_MAX  100
 
+#define AUTO_DISARM_DELAY_MAX  60
+
+#define RC_DEADBAND_MAX  32
+#define RC_YAW_DEADBAND_MAX  100
+
+#define DEADBAND3D_THROTTLE_MIN  1
+#define DEADBAND3D_THROTTLE_MAX  100
+
+#define CONTROL_RATE_CONFIG_THR_MID_MAX  100
+#define CONTROL_RATE_CONFIG_THR_EXPO_MAX  100
+#define CONTROL_RATE_CONFIG_THR_HOVER_MAX  100
+
+#define CONTROL_RATE_CONFIG_THROTTLE_LIMIT_PERCENT_MIN  25
+#define CONTROL_RATE_CONFIG_THROTTLE_LIMIT_PERCENT_MAX  100
+
+#define CONTROL_RATE_CONFIG_RC_RATES_MIN  1
 #define CONTROL_RATE_CONFIG_RC_RATES_MAX  255
 
 #define CONTROL_RATE_CONFIG_RATE_LIMIT_MIN  200
@@ -86,25 +102,19 @@ typedef enum {
 extern float rcCommand[4];
 
 typedef struct rcSmoothingFilter_s {
-    bool filterInitialized;
-    pt3Filter_t filterSetpoint[4];
+    pt3Filter_t filterSetpoint[PRIMARY_CHANNEL_COUNT];
     pt3Filter_t filterRcDeflection[RP_AXIS_COUNT];
-    pt3Filter_t filterFeedforward[3];
+    pt3Filter_t filterFeedforward[XYZ_AXIS_COUNT];
 
     uint8_t setpointCutoffSetting;
     uint8_t throttleCutoffSetting;
-    uint8_t feedforwardCutoffSetting;
 
     uint16_t setpointCutoffFrequency;
     uint16_t throttleCutoffFrequency;
-    uint16_t feedforwardCutoffFrequency;
 
-    float smoothedRxRateHz;
-    uint8_t sampleCount;
     uint8_t debugAxis;
 
     float autoSmoothnessFactorSetpoint;
-    float autoSmoothnessFactorFeedforward;
     float autoSmoothnessFactorThrottle;
 } rcSmoothingFilter_t;
 
@@ -144,3 +154,7 @@ void processRcStickPositions(void);
 bool isUsingSticksForArming(void);
 
 void rcControlsInit(void);
+
+bool wasLastDisarmUserRequested(void); // Check if the user has requested a disarm since the last cleared
+
+void clearWasLastDisarmUserRequested(void); // Clear the user disarm request flag

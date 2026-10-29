@@ -159,8 +159,8 @@ static void updateChannelData(void)
     for (i = 0, offset = ibusChannelOffset; i < IBUS_MAX_SLOTS; i++, offset += 2) {
         ibusChannelData[i] = ibus[offset] + ((ibus[offset + 1] & 0x0F) << 8);
     }
-    //latest IBUS recievers are using prviously not used 4 bits on every channel to incresse total channel count
-    for (i = IBUS_MAX_SLOTS, offset = ibusChannelOffset + 1; i < IBUS_MAX_CHANNEL; i++, offset += 6) {
+    //latest IBUS receivers are using previously not used 4 bits on every channel to increase total channel count
+    for (i = IBUS_MAX_SLOTS, offset = ibusChannelOffset + 1; i < IBUS_MAX_CHANNEL && offset + 4 < IBUS_BUFFSIZE; i++, offset += 6) {
         ibusChannelData[i] = ((ibus[offset] & 0xF0) >> 4) | (ibus[offset + 2] & 0xF0) | ((ibus[offset + 4] & 0xF0) << 4);
     }
 }
@@ -207,19 +207,19 @@ bool ibusInit(const rxConfig_t *rxConfig, rxRuntimeState_t *rxRuntimeState)
     rxRuntimeState->rcReadRawFn = ibusReadRawRC;
     rxRuntimeState->rcFrameStatusFn = ibusFrameStatus;
 
-    const serialPortConfig_t *portConfig = findSerialPortConfig(FUNCTION_RX_SERIAL);
-    if (!portConfig) {
+    const serialPortIdentifier_e port = rxConfig->rx_uart;
+    if (port == SERIAL_PORT_NONE) {
         return false;
     }
 
 #ifdef USE_TELEMETRY
-    bool portShared = isSerialPortShared(portConfig, FUNCTION_RX_SERIAL, FUNCTION_TELEMETRY_IBUS);
+    bool portShared = isSerialPortShared(port, FUNCTION_RX_SERIAL, FUNCTION_TELEMETRY_IBUS);
 #else
     bool portShared = false;
 #endif
 
     rxBytesToIgnore = 0;
-    serialPort_t *ibusPort = openSerialPort(portConfig->identifier,
+    serialPort_t *ibusPort = openSerialPort(port,
         FUNCTION_RX_SERIAL,
         ibusDataReceive,
         NULL,

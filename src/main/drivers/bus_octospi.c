@@ -60,18 +60,18 @@
 
 octoSpiDevice_t octoSpiDevice[OCTOSPIDEV_COUNT] = { 0 };
 
-MMFLASH_CODE_NOINLINE OCTOSPIDevice octoSpiDeviceByInstance(OCTOSPI_TypeDef *instance)
+MMFLASH_CODE_NOINLINE octoSpiDevice_e octoSpiDeviceByInstance(octoSpiResource_t *instance)
 {
-#ifdef USE_OCTOSPI_DEVICE_1
-    if (instance == OCTOSPI1) {
-        return OCTOSPIDEV_1;
+    for (size_t hwindex = 0; hwindex < OCTOSPIDEV_COUNT; hwindex++) {
+        if (octoSpiHardware[hwindex].reg == instance) {
+            return octoSpiHardware[hwindex].device;
+        }
     }
-#endif
 
     return OCTOSPIINVALID;
 }
 
-OCTOSPI_TypeDef *octoSpiInstanceByDevice(OCTOSPIDevice device)
+octoSpiResource_t *octoSpiInstanceByDevice(octoSpiDevice_e device)
 {
     if (device == OCTOSPIINVALID || device >= OCTOSPIDEV_COUNT) {
         return NULL;
@@ -80,24 +80,13 @@ OCTOSPI_TypeDef *octoSpiInstanceByDevice(OCTOSPIDevice device)
     return octoSpiDevice[device].dev;
 }
 
-const octoSpiHardware_t octoSpiHardware[] = {
-#if defined(STM32H730xx) || defined(STM32H723xx)
-    {
-        .device = OCTOSPIDEV_1,
-        .reg = OCTOSPI1,
-    }
-#else
-#error MCU not supported.
-#endif
-};
-
-bool octoSpiInit(OCTOSPIDevice device)
+bool octoSpiInit(octoSpiDevice_e device)
 {
-    for (size_t hwindex = 0; hwindex < ARRAYLEN(octoSpiHardware); hwindex++) {
+    for (size_t hwindex = 0; hwindex < OCTOSPIDEV_COUNT; hwindex++) {
         const octoSpiHardware_t *hw = &octoSpiHardware[hwindex];
 
-        OCTOSPIDevice device = hw->device;
-        octoSpiDevice_t *pDev = &octoSpiDevice[device];
+        const octoSpiDevice_e hwDevice = hw->device;
+        octoSpiDevice_t *pDev = &octoSpiDevice[hwDevice];
 
         pDev->dev = hw->reg;
     }

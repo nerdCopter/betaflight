@@ -83,6 +83,8 @@ extern "C" {
     acc_t acc;
 
     PG_REGISTER(batteryConfig_t, batteryConfig, PG_BATTERY_CONFIG, 0);
+    PG_REGISTER_ARRAY(batteryProfile_t, BATTERY_PROFILE_COUNT, batteryProfiles, PG_BATTERY_PROFILES, 0);
+    const batteryProfile_t *currentBatteryProfile;
     PG_REGISTER(blackboxConfig_t, blackboxConfig, PG_BLACKBOX_CONFIG, 0);
     PG_REGISTER(systemConfig_t, systemConfig, PG_SYSTEM_CONFIG, 0);
     PG_REGISTER(pilotConfig_t, pilotConfig, PG_PILOT_CONFIG, 0);
@@ -112,7 +114,7 @@ extern "C" {
 
     uint16_t updateLinkQualitySamples(uint16_t value);
 
-    extern uint16_t applyRxChannelRangeConfiguraton(int sample, const rxChannelRangeConfig_t *range);
+    extern uint16_t applyRxChannelRangeConfiguraton(int sample, const scaleRangef_t *range);
 }
 void setDefaultSimulationState()
 {
@@ -209,8 +211,9 @@ TEST(LQTest, TestInit)
 
     // and
     // this battery configuration (used for battery voltage elements)
-    batteryConfigMutable()->vbatmincellvoltage = 330;
-    batteryConfigMutable()->vbatmaxcellvoltage = 430;
+    batteryProfilesMutable(0)->vbatmincellvoltage = 330;
+    batteryProfilesMutable(0)->vbatmaxcellvoltage = 430;
+    currentBatteryProfile = batteryProfiles(0);
 
     // when
     // OSD is initialised
@@ -341,9 +344,9 @@ TEST(LQTest, TestElementLQ_PROTOCOL_CRSF_VALUES)
         simulationTime += 10;
     }
 
-    // crsf setLinkQualityDirect 0-300;
+    // CRSF link quality ranges from 0-100.
 
-    for (uint8_t x = 0; x <= 99; x++) {
+    for (uint8_t x = 0; x <= 100; x++) {
         for (uint8_t m = 0; m <= 4; m++) {
             // when x scaled
             setLinkQualityDirect(x);
@@ -358,6 +361,18 @@ TEST(LQTest, TestElementLQ_PROTOCOL_CRSF_VALUES)
             displayPortTestBufferSubstring(8, 1, "%c%1d:%2d", SYM_LINK_QUALITY, m, x);
         }
     }
+
+    osdElementConfigMutable()->item_pos[OSD_LINK_QUALITY] =
+        OSD_POS(8, 1) | OSD_PROFILE_1_FLAG | (OSD_ELEMENT_TYPE_2 << 14);
+    osdAnalyzeActiveElements();
+    setLinkQualityDirect(100);
+    rxSetRfMode(4);
+    simulationTime += 100000;
+    while (osdUpdateCheck(simulationTime, 0)) {
+        osdUpdate(simulationTime);
+        simulationTime += 10;
+    }
+    displayPortTestBufferSubstring(8, 1, "%c%2d", SYM_LINK_QUALITY, 100);
 }
 /*
  * Tests the LQ Alarms
@@ -477,10 +492,12 @@ extern "C" {
     bool isBeeperOn() { return false; }
     uint8_t getCurrentPidProfileIndex() { return 0; }
     uint8_t getCurrentControlRateProfileIndex() { return 0; }
+    uint8_t getCurrentBatteryProfileIndex() { return 0; }
     batteryState_e getBatteryState() { return BATTERY_OK; }
     uint8_t getBatteryCellCount() { return 4; }
     uint16_t getBatteryVoltage() { return 1680; }
     uint16_t getBatteryAverageCellVoltage() { return  420; }
+    uint8_t calculateBatteryPercentageRemaining(void) { return  0; }
     int32_t getAmperage() { return 0; }
     int32_t getMAhDrawn() { return 0; }
     float getWhDrawn() { return 0.0; }
@@ -491,8 +508,7 @@ extern "C" {
     bool isBlackboxDeviceWorking() { return true; }
     bool isBlackboxDeviceFull() { return false; }
     serialPort_t *openSerialPort(serialPortIdentifier_e, serialPortFunction_e, serialReceiveCallbackPtr, void *, uint32_t, portMode_e, portOptions_e) {return NULL;}
-    const serialPortConfig_t *findSerialPortConfig(serialPortFunction_e ) {return NULL;}
-    bool telemetryCheckRxPortShared(const serialPortConfig_t *) {return false;}
+    bool telemetryCheckRxPortShared(serialPortIdentifier_e, SerialRXType) {return false;}
     bool cmsDisplayPortRegister(displayPort_t *) { return false; }
     uint16_t getCoreTemperatureCelsius(void) { return 0; }
     bool isCrashFlipModeActive(void) { return false; }

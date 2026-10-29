@@ -55,7 +55,7 @@ LOCAL_UNUSED_FUNCTION static void configureMasterClockOutputs(void)
 
 bool isMPUSoftReset(void)
 {
-    if (cachedRccCsrValue & RCC_RSR_SFTRSTF)
+    if (cachedResetFlags & RCC_RSR_SFTRSTF)
         return true;
     else
         return false;
@@ -82,7 +82,7 @@ bool isMemoryMappedModeEnabledOnBoot(void)
 
 void memoryMappedModeInit(void)
 {
-#if defined(STM32H730xx) || defined(STM32H723xx)
+#if defined(STM32H730xx) || defined(STM32H723xx) || defined(STM32H735xx)
     // Smaller MCU packages have ONE OCTOSPI interface which supports memory mapped mode.
     memoryMappedModeEnabledOnBoot = READ_BIT(OCTOSPI1->CR, OCTOSPI_CR_FMODE) == OCTOSPI_CR_FMODE;
 #else
@@ -102,7 +102,7 @@ void systemInit(void)
     HAL_NVIC_SetPriorityGrouping(NVIC_PRIORITY_GROUPING);
 
     // cache RCC->RSR value to use it in isMPUSoftReset() and others
-    cachedRccCsrValue = RCC->RSR;
+    cachedResetFlags = RCC->RSR;
 
     /* Accounts for OP Bootloader, set the Vector Table base address as specified in .ld file */
     //extern void *isr_vector_table_base;
@@ -111,14 +111,14 @@ void systemInit(void)
 
     //RCC_ClearFlag();
 
-#if defined(STM32H743xx) || defined(STM32H750xx)
+#if defined(STM32H743xx) || defined(STM32H750xx) || defined(STM32H753xx) || defined(STM32H757xx)
     __HAL_RCC_D2SRAM1_CLK_ENABLE();
     __HAL_RCC_D2SRAM2_CLK_ENABLE();
     __HAL_RCC_D2SRAM3_CLK_ENABLE();
 #elif defined(STM32H7A3xx) || defined(STM32H7A3xxQ)
     __HAL_RCC_AHBSRAM1_CLK_ENABLE();
     __HAL_RCC_AHBSRAM2_CLK_ENABLE();
-#elif defined(STM32H723xx) || defined(STM32H725xx) || defined(STM32H730xx)
+#elif defined(STM32H723xx) || defined(STM32H725xx) || defined(STM32H730xx) || defined(STM32H735xx)
     __HAL_RCC_D2SRAM1_CLK_ENABLE();
     __HAL_RCC_D2SRAM2_CLK_ENABLE();
 #else
@@ -170,7 +170,7 @@ void systemResetToBootloader(bootloaderRequestType_e requestType)
     NVIC_SystemReset();
 }
 
-#if defined(STM32H743xx) || defined(STM32H750xx) || defined(STM32H723xx) || defined(STM32H725xx) || defined(STM32H730xx)
+#if defined(STM32H743xx) || defined(STM32H750xx) || defined(STM32H723xx) || defined(STM32H725xx) || defined(STM32H730xx) || defined(STM32H735xx) || defined(STM32H753xx) || defined(STM32H757xx)
 #define SYSMEMBOOT_VECTOR_TABLE ((uint32_t *)0x1ff09800)
 #elif defined(STM32H7A3xx) || defined(STM32H7A3xxQ)
 #define SYSMEMBOOT_VECTOR_TABLE ((uint32_t *)0x1ff0a000)

@@ -31,6 +31,7 @@
 #include "stm32f4xx.h"
 #include "platform/rcc.h"
 #include "drivers/timer.h"
+#include "platform/timer.h"
 
 const timerDef_t timerDefinitions[HARDWARE_TIMER_DEFINITION_COUNT] = {
     { .TIMx = TIM1,  .rcc = RCC_APB2(TIM1),  .inputIrq = TIM1_CC_IRQn},
@@ -68,7 +69,7 @@ const timerHardware_t fullTimerHardware[FULL_TIMER_CHANNEL_COUNT] = {
     DEF_TIM(TIM1, CH1,  PA8, 0, 0),
     DEF_TIM(TIM1, CH2,  PA9, 0, 0),
     DEF_TIM(TIM1, CH3,  PA10, 0, 0),
-    DEF_TIM(TIM1, CH1N, PA11, 0, 0),
+    DEF_TIM(TIM1, CH4,  PA11, 0, 0),
     DEF_TIM(TIM2, CH1,  PA15, 0, 0),
 
     DEF_TIM(TIM5, CH1,  PA0, 0, 0),
@@ -222,13 +223,14 @@ const timerHardware_t fullTimerHardware[FULL_TIMER_CHANNEL_COUNT] = {
     7                               TIM8_CH1    TIM8_CH2    TIM8_CH3                TIM8_CH4
 */
 
-uint32_t timerClock(const TIM_TypeDef *tim)
+uint32_t timerClockFromInstance(const timerResource_t *tim)
 {
 #if defined(STM32F411xE)
     UNUSED(tim);
     return SystemCoreClock;
 #elif defined(STM32F40_41xxx) || defined(STM32F446xx)
-    if (tim == TIM8 || tim == TIM1 || tim == TIM9 || tim == TIM10 || tim == TIM11) {
+    const TIM_TypeDef *tim_ptr = (const TIM_TypeDef *)tim;
+    if (tim_ptr == TIM8 || tim_ptr == TIM1 || tim_ptr == TIM9 || tim_ptr == TIM10 || tim_ptr == TIM11) {
         return SystemCoreClock;
     } else {
         return SystemCoreClock / 2;
@@ -236,5 +238,10 @@ uint32_t timerClock(const TIM_TypeDef *tim)
 #else
     #error "No timer clock defined correctly for MCU"
 #endif
+}
+
+uint32_t timerClock(const timerHardware_t *timHw)
+{
+    return timerClockFromInstance(timHw->tim);
 }
 #endif

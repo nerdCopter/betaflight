@@ -38,7 +38,7 @@
 #include "drivers/sensor.h"
 #include "drivers/time.h"
 
-// 10 MHz max SPI frequency
+// 8 MHz max SPI frequency
 #define ICM20689_MAX_SPI_CLK_HZ 8000000
 
 // Register 0x37 - INT_PIN_CFG / Pin Bypass Enable Configuration
@@ -168,6 +168,9 @@ void icm20689GyroInit(gyroDev_t *gyro)
     spiWriteReg(dev, MPU_RA_INT_PIN_CFG, ICM20689_INT_ANYRD_2CLEAR);
 
     spiWriteReg(dev, MPU_RA_INT_ENABLE, MPU_RF_DATA_RDY_EN);
+
+    gyro->tempScale = 0.003f;
+    gyro->tempZero = 25.0f;
 }
 
 bool icm20689SpiGyroDetect(gyroDev_t *gyro)

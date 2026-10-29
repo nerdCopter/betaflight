@@ -191,7 +191,7 @@ static void buildTelemetryFrame(uint8_t *packet)
         uint8_t a1Value;
         switch (rxCc2500SpiConfig()->a1Source) {
         case FRSKY_SPI_A1_SOURCE_EXTADC:
-            a1Value = (uint8_t)((adcGetChannel(ADC_EXTERNAL1) & 0xfe0) >> 5);
+            a1Value = (uint8_t)((adcGetValue(ADC_EXTERNAL1) & 0xfe0) >> 5);
             break;
         case FRSKY_SPI_A1_SOURCE_CONST:
             a1Value = A1_CONST_X & 0x7f;
@@ -437,7 +437,7 @@ rx_spi_received_e frSkyXHandlePacket(uint8_t * const packet, uint8_t * const pro
                 }
                 if (!frameReceived) {
                     packetErrors++;
-                    DEBUG_SET(DEBUG_RX_FRSKY_SPI, DEBUG_DATA_BAD_FRAME, packetErrors);
+                    DEBUG_SET(DEBUG_RX_FRSKY_SPI, DEBUG_DATA_BAD_FRAME, packetErrors);  //!< Packet Errors
                     cc2500Strobe(CC2500_SFRX);
                 }
             }
@@ -509,7 +509,7 @@ rx_spi_received_e frSkyXHandlePacket(uint8_t * const packet, uint8_t * const pro
                 break;
             }
             missingPackets++;
-            DEBUG_SET(DEBUG_RX_FRSKY_SPI, DEBUG_DATA_MISSING_PACKETS, missingPackets);
+            DEBUG_SET(DEBUG_RX_FRSKY_SPI, DEBUG_DATA_MISSING_PACKETS, missingPackets);  //!< Missing Packets
             *protocolState = STATE_DATA;
         }
         break;

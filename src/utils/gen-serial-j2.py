@@ -8,7 +8,7 @@ import pprint
 
 # configuration for template generation
 serials = {
-    "UART": {"ids": list(range(0, 10 + 1)),
+    "UART": {"ids": list(range(0, 15 + 1)),
              "inverter": True,
              "first_index": True,   # support configurable first index for this port
              },
@@ -20,6 +20,11 @@ serials = {
                    "use_enables_all": True,
                    "force_continuous": True,
                    },
+    "PIOUART": {"ids": list(range(0, 9 + 1)),
+               "depends": {"UART"},
+                "first_index": True,   # support configurable first index for this port
+                "force_continuous": True,
+                },
     "VCP": {"singleton": True,
             "no_pins": True}
 }

@@ -39,15 +39,19 @@ All <type><n>_(RX|TX)_PINS are normalized too:
  - if port is not enable, both will be undefined, possibly with warning
   - pass -DWARN_UNUSED_SERIAL_PORT to compiler to check pin defined without corresponding port being enabled.
 
-Generated on 2024-12-20
+Generated on 2026-05-27
 
 Configuration used:
 {   'LPUART': {'depends': {'UART'}, 'ids': [1]},
+    'PIOUART': {   'depends': {'UART'},
+                   'first_index': True,
+                   'force_continuous': True,
+                   'ids': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]},
     'SOFTSERIAL': {   'force_continuous': True,
                       'ids': [1, 2],
                       'use_enables_all': True},
     'UART': {   'first_index': True,
-                'ids': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+                'ids': [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
                 'inverter': True},
     'VCP': {'no_pins': True, 'singleton': True}}
 */
@@ -124,13 +128,38 @@ Configuration used:
 #else
 # define SERIAL_UART10_USED 0
 #endif
+#if defined(USE_UART11)
+# define SERIAL_UART11_USED 1
+#else
+# define SERIAL_UART11_USED 0
+#endif
+#if defined(USE_UART12)
+# define SERIAL_UART12_USED 1
+#else
+# define SERIAL_UART12_USED 0
+#endif
+#if defined(USE_UART13)
+# define SERIAL_UART13_USED 1
+#else
+# define SERIAL_UART13_USED 0
+#endif
+#if defined(USE_UART14)
+# define SERIAL_UART14_USED 1
+#else
+# define SERIAL_UART14_USED 0
+#endif
+#if defined(USE_UART15)
+# define SERIAL_UART15_USED 1
+#else
+# define SERIAL_UART15_USED 0
+#endif
 
-#define SERIAL_UART_MASK ((SERIAL_UART0_USED * BIT(0)) | (SERIAL_UART1_USED * BIT(1 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART2_USED * BIT(2 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART3_USED * BIT(3 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART4_USED * BIT(4 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART5_USED * BIT(5 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART6_USED * BIT(6 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART7_USED * BIT(7 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART8_USED * BIT(8 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART9_USED * BIT(9 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART10_USED * BIT(10 - SERIAL_UART_FIRST_INDEX)))
-#define SERIAL_UART_COUNT (SERIAL_UART0_USED + SERIAL_UART1_USED + SERIAL_UART2_USED + SERIAL_UART3_USED + SERIAL_UART4_USED + SERIAL_UART5_USED + SERIAL_UART6_USED + SERIAL_UART7_USED + SERIAL_UART8_USED + SERIAL_UART9_USED + SERIAL_UART10_USED)
+#define SERIAL_UART_MASK ((SERIAL_UART0_USED * BIT(0)) | (SERIAL_UART1_USED * BIT(1 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART2_USED * BIT(2 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART3_USED * BIT(3 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART4_USED * BIT(4 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART5_USED * BIT(5 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART6_USED * BIT(6 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART7_USED * BIT(7 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART8_USED * BIT(8 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART9_USED * BIT(9 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART10_USED * BIT(10 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART11_USED * BIT(11 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART12_USED * BIT(12 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART13_USED * BIT(13 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART14_USED * BIT(14 - SERIAL_UART_FIRST_INDEX)) | (SERIAL_UART15_USED * BIT(15 - SERIAL_UART_FIRST_INDEX)))
+#define SERIAL_UART_COUNT (SERIAL_UART0_USED + SERIAL_UART1_USED + SERIAL_UART2_USED + SERIAL_UART3_USED + SERIAL_UART4_USED + SERIAL_UART5_USED + SERIAL_UART6_USED + SERIAL_UART7_USED + SERIAL_UART8_USED + SERIAL_UART9_USED + SERIAL_UART10_USED + SERIAL_UART11_USED + SERIAL_UART12_USED + SERIAL_UART13_USED + SERIAL_UART14_USED + SERIAL_UART15_USED)
 // 0 if no port is defined
 #define SERIAL_UART_MAX (SERIAL_UART_MASK ? LOG2(SERIAL_UART_MASK) + 1 : 0)
 // enable USE_INVERTED first, before normalization
-#if !defined(USE_INVERTER) && (INVERTER_PIN_UART0 || INVERTER_PIN_UART1 || INVERTER_PIN_UART2 || INVERTER_PIN_UART3 || INVERTER_PIN_UART4 || INVERTER_PIN_UART5 || INVERTER_PIN_UART6 || INVERTER_PIN_UART7 || INVERTER_PIN_UART8 || INVERTER_PIN_UART9 || INVERTER_PIN_UART10)
+#if !defined(USE_INVERTER) && (INVERTER_PIN_UART0 || INVERTER_PIN_UART1 || INVERTER_PIN_UART2 || INVERTER_PIN_UART3 || INVERTER_PIN_UART4 || INVERTER_PIN_UART5 || INVERTER_PIN_UART6 || INVERTER_PIN_UART7 || INVERTER_PIN_UART8 || INVERTER_PIN_UART9 || INVERTER_PIN_UART10 || INVERTER_PIN_UART11 || INVERTER_PIN_UART12 || INVERTER_PIN_UART13 || INVERTER_PIN_UART14 || INVERTER_PIN_UART15)
 # define USE_INVERTER
 #endif
 
@@ -432,6 +461,141 @@ Configuration used:
 #if !SERIAL_UART10_USED &&  defined(INVERTER_PIN_UART10)
 # undef INVERTER_PIN_UART10
 #endif
+#if SERIAL_UART11_USED && !defined(UART11_RX_PIN)
+# define UART11_RX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_UART11_USED && defined(UART11_RX_PIN)
+# warning "UART11_RX_PIN is defined but UART11 is not enabled"
+#endif
+#if !SERIAL_UART11_USED &&  defined(UART11_RX_PIN)
+# undef UART11_RX_PIN
+#endif
+#if SERIAL_UART11_USED && !defined(UART11_TX_PIN)
+# define UART11_TX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_UART11_USED && defined(UART11_TX_PIN)
+# warning "UART11_TX_PIN is defined but UART11 is not enabled"
+#endif
+#if !SERIAL_UART11_USED &&  defined(UART11_TX_PIN)
+# undef UART11_TX_PIN
+#endif
+#if SERIAL_UART11_USED && !defined(INVERTER_PIN_UART11)
+# define INVERTER_PIN_UART11 NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_UART11_USED && defined(INVERTER_PIN_UART11)
+# warning "INVERTER_PIN_UART11 is defined but UART11 is not enabled"
+#endif
+#if !SERIAL_UART11_USED &&  defined(INVERTER_PIN_UART11)
+# undef INVERTER_PIN_UART11
+#endif
+#if SERIAL_UART12_USED && !defined(UART12_RX_PIN)
+# define UART12_RX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_UART12_USED && defined(UART12_RX_PIN)
+# warning "UART12_RX_PIN is defined but UART12 is not enabled"
+#endif
+#if !SERIAL_UART12_USED &&  defined(UART12_RX_PIN)
+# undef UART12_RX_PIN
+#endif
+#if SERIAL_UART12_USED && !defined(UART12_TX_PIN)
+# define UART12_TX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_UART12_USED && defined(UART12_TX_PIN)
+# warning "UART12_TX_PIN is defined but UART12 is not enabled"
+#endif
+#if !SERIAL_UART12_USED &&  defined(UART12_TX_PIN)
+# undef UART12_TX_PIN
+#endif
+#if SERIAL_UART12_USED && !defined(INVERTER_PIN_UART12)
+# define INVERTER_PIN_UART12 NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_UART12_USED && defined(INVERTER_PIN_UART12)
+# warning "INVERTER_PIN_UART12 is defined but UART12 is not enabled"
+#endif
+#if !SERIAL_UART12_USED &&  defined(INVERTER_PIN_UART12)
+# undef INVERTER_PIN_UART12
+#endif
+#if SERIAL_UART13_USED && !defined(UART13_RX_PIN)
+# define UART13_RX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_UART13_USED && defined(UART13_RX_PIN)
+# warning "UART13_RX_PIN is defined but UART13 is not enabled"
+#endif
+#if !SERIAL_UART13_USED &&  defined(UART13_RX_PIN)
+# undef UART13_RX_PIN
+#endif
+#if SERIAL_UART13_USED && !defined(UART13_TX_PIN)
+# define UART13_TX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_UART13_USED && defined(UART13_TX_PIN)
+# warning "UART13_TX_PIN is defined but UART13 is not enabled"
+#endif
+#if !SERIAL_UART13_USED &&  defined(UART13_TX_PIN)
+# undef UART13_TX_PIN
+#endif
+#if SERIAL_UART13_USED && !defined(INVERTER_PIN_UART13)
+# define INVERTER_PIN_UART13 NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_UART13_USED && defined(INVERTER_PIN_UART13)
+# warning "INVERTER_PIN_UART13 is defined but UART13 is not enabled"
+#endif
+#if !SERIAL_UART13_USED &&  defined(INVERTER_PIN_UART13)
+# undef INVERTER_PIN_UART13
+#endif
+#if SERIAL_UART14_USED && !defined(UART14_RX_PIN)
+# define UART14_RX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_UART14_USED && defined(UART14_RX_PIN)
+# warning "UART14_RX_PIN is defined but UART14 is not enabled"
+#endif
+#if !SERIAL_UART14_USED &&  defined(UART14_RX_PIN)
+# undef UART14_RX_PIN
+#endif
+#if SERIAL_UART14_USED && !defined(UART14_TX_PIN)
+# define UART14_TX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_UART14_USED && defined(UART14_TX_PIN)
+# warning "UART14_TX_PIN is defined but UART14 is not enabled"
+#endif
+#if !SERIAL_UART14_USED &&  defined(UART14_TX_PIN)
+# undef UART14_TX_PIN
+#endif
+#if SERIAL_UART14_USED && !defined(INVERTER_PIN_UART14)
+# define INVERTER_PIN_UART14 NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_UART14_USED && defined(INVERTER_PIN_UART14)
+# warning "INVERTER_PIN_UART14 is defined but UART14 is not enabled"
+#endif
+#if !SERIAL_UART14_USED &&  defined(INVERTER_PIN_UART14)
+# undef INVERTER_PIN_UART14
+#endif
+#if SERIAL_UART15_USED && !defined(UART15_RX_PIN)
+# define UART15_RX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_UART15_USED && defined(UART15_RX_PIN)
+# warning "UART15_RX_PIN is defined but UART15 is not enabled"
+#endif
+#if !SERIAL_UART15_USED &&  defined(UART15_RX_PIN)
+# undef UART15_RX_PIN
+#endif
+#if SERIAL_UART15_USED && !defined(UART15_TX_PIN)
+# define UART15_TX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_UART15_USED && defined(UART15_TX_PIN)
+# warning "UART15_TX_PIN is defined but UART15 is not enabled"
+#endif
+#if !SERIAL_UART15_USED &&  defined(UART15_TX_PIN)
+# undef UART15_TX_PIN
+#endif
+#if SERIAL_UART15_USED && !defined(INVERTER_PIN_UART15)
+# define INVERTER_PIN_UART15 NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_UART15_USED && defined(INVERTER_PIN_UART15)
+# warning "INVERTER_PIN_UART15 is defined but UART15 is not enabled"
+#endif
+#if !SERIAL_UART15_USED &&  defined(INVERTER_PIN_UART15)
+# undef INVERTER_PIN_UART15
+#endif
 
 /****                                LPUART                                 *****/
 
@@ -536,6 +700,267 @@ Configuration used:
 # undef SOFTSERIAL2_TX_PIN
 #endif
 
+/****                                PIOUART                                 *****/
+
+// normalize SERIAL_PIOUART_FIRST_INDEX
+#ifndef SERIAL_PIOUART_FIRST_INDEX
+#define SERIAL_PIOUART_FIRST_INDEX 1
+#endif
+
+#if SERIAL_PIOUART_FIRST_INDEX == 0
+#if defined(USE_PIOUART0)
+# define SERIAL_PIOUART0_USED 1
+#else
+# define SERIAL_PIOUART0_USED 0
+#endif
+#else // USE_PIOUART0 is not allowed
+# if defined(USE_PIOUART0)
+#  error "USE_PIOUART0 is defined, but SERIAL_PIOUART does not allow index 0"
+# else
+#  define SERIAL_PIOUART0_USED 0
+# endif
+#endif
+#if defined(USE_PIOUART1)
+# define SERIAL_PIOUART1_USED 1
+#else
+# define SERIAL_PIOUART1_USED 0
+#endif
+#if defined(USE_PIOUART2)
+# define SERIAL_PIOUART2_USED 1
+#else
+# define SERIAL_PIOUART2_USED 0
+#endif
+#if defined(USE_PIOUART3)
+# define SERIAL_PIOUART3_USED 1
+#else
+# define SERIAL_PIOUART3_USED 0
+#endif
+#if defined(USE_PIOUART4)
+# define SERIAL_PIOUART4_USED 1
+#else
+# define SERIAL_PIOUART4_USED 0
+#endif
+#if defined(USE_PIOUART5)
+# define SERIAL_PIOUART5_USED 1
+#else
+# define SERIAL_PIOUART5_USED 0
+#endif
+#if defined(USE_PIOUART6)
+# define SERIAL_PIOUART6_USED 1
+#else
+# define SERIAL_PIOUART6_USED 0
+#endif
+#if defined(USE_PIOUART7)
+# define SERIAL_PIOUART7_USED 1
+#else
+# define SERIAL_PIOUART7_USED 0
+#endif
+#if defined(USE_PIOUART8)
+# define SERIAL_PIOUART8_USED 1
+#else
+# define SERIAL_PIOUART8_USED 0
+#endif
+#if defined(USE_PIOUART9)
+# define SERIAL_PIOUART9_USED 1
+#else
+# define SERIAL_PIOUART9_USED 0
+#endif
+
+#define SERIAL_PIOUART_MASK ((SERIAL_PIOUART0_USED * BIT(0)) | (SERIAL_PIOUART1_USED * BIT(1 - SERIAL_PIOUART_FIRST_INDEX)) | (SERIAL_PIOUART2_USED * BIT(2 - SERIAL_PIOUART_FIRST_INDEX)) | (SERIAL_PIOUART3_USED * BIT(3 - SERIAL_PIOUART_FIRST_INDEX)) | (SERIAL_PIOUART4_USED * BIT(4 - SERIAL_PIOUART_FIRST_INDEX)) | (SERIAL_PIOUART5_USED * BIT(5 - SERIAL_PIOUART_FIRST_INDEX)) | (SERIAL_PIOUART6_USED * BIT(6 - SERIAL_PIOUART_FIRST_INDEX)) | (SERIAL_PIOUART7_USED * BIT(7 - SERIAL_PIOUART_FIRST_INDEX)) | (SERIAL_PIOUART8_USED * BIT(8 - SERIAL_PIOUART_FIRST_INDEX)) | (SERIAL_PIOUART9_USED * BIT(9 - SERIAL_PIOUART_FIRST_INDEX)))
+#define SERIAL_PIOUART_COUNT (SERIAL_PIOUART0_USED + SERIAL_PIOUART1_USED + SERIAL_PIOUART2_USED + SERIAL_PIOUART3_USED + SERIAL_PIOUART4_USED + SERIAL_PIOUART5_USED + SERIAL_PIOUART6_USED + SERIAL_PIOUART7_USED + SERIAL_PIOUART8_USED + SERIAL_PIOUART9_USED)
+// 0 if no port is defined
+#define SERIAL_PIOUART_MAX (SERIAL_PIOUART_MASK ? LOG2(SERIAL_PIOUART_MASK) + 1 : 0)
+
+#if SERIAL_PIOUART_COUNT != SERIAL_PIOUART_MAX
+#if SERIAL_PIOUART_FIRST_INDEX == 0
+# error PIOUART ports must start with PIOUART0 and be continuous
+#else
+# error PIOUART ports must start with PIOUART1 and be continuous
+#endif
+#endif
+
+// Normalize PIOUART TX/RX
+#if SERIAL_PIOUART0_USED && !defined(PIOUART0_RX_PIN)
+# define PIOUART0_RX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART0_USED && defined(PIOUART0_RX_PIN)
+# warning "PIOUART0_RX_PIN is defined but PIOUART0 is not enabled"
+#endif
+#if !SERIAL_PIOUART0_USED &&  defined(PIOUART0_RX_PIN)
+# undef PIOUART0_RX_PIN
+#endif
+#if SERIAL_PIOUART0_USED && !defined(PIOUART0_TX_PIN)
+# define PIOUART0_TX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART0_USED && defined(PIOUART0_TX_PIN)
+# warning "PIOUART0_TX_PIN is defined but PIOUART0 is not enabled"
+#endif
+#if !SERIAL_PIOUART0_USED &&  defined(PIOUART0_TX_PIN)
+# undef PIOUART0_TX_PIN
+#endif
+#if SERIAL_PIOUART1_USED && !defined(PIOUART1_RX_PIN)
+# define PIOUART1_RX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART1_USED && defined(PIOUART1_RX_PIN)
+# warning "PIOUART1_RX_PIN is defined but PIOUART1 is not enabled"
+#endif
+#if !SERIAL_PIOUART1_USED &&  defined(PIOUART1_RX_PIN)
+# undef PIOUART1_RX_PIN
+#endif
+#if SERIAL_PIOUART1_USED && !defined(PIOUART1_TX_PIN)
+# define PIOUART1_TX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART1_USED && defined(PIOUART1_TX_PIN)
+# warning "PIOUART1_TX_PIN is defined but PIOUART1 is not enabled"
+#endif
+#if !SERIAL_PIOUART1_USED &&  defined(PIOUART1_TX_PIN)
+# undef PIOUART1_TX_PIN
+#endif
+#if SERIAL_PIOUART2_USED && !defined(PIOUART2_RX_PIN)
+# define PIOUART2_RX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART2_USED && defined(PIOUART2_RX_PIN)
+# warning "PIOUART2_RX_PIN is defined but PIOUART2 is not enabled"
+#endif
+#if !SERIAL_PIOUART2_USED &&  defined(PIOUART2_RX_PIN)
+# undef PIOUART2_RX_PIN
+#endif
+#if SERIAL_PIOUART2_USED && !defined(PIOUART2_TX_PIN)
+# define PIOUART2_TX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART2_USED && defined(PIOUART2_TX_PIN)
+# warning "PIOUART2_TX_PIN is defined but PIOUART2 is not enabled"
+#endif
+#if !SERIAL_PIOUART2_USED &&  defined(PIOUART2_TX_PIN)
+# undef PIOUART2_TX_PIN
+#endif
+#if SERIAL_PIOUART3_USED && !defined(PIOUART3_RX_PIN)
+# define PIOUART3_RX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART3_USED && defined(PIOUART3_RX_PIN)
+# warning "PIOUART3_RX_PIN is defined but PIOUART3 is not enabled"
+#endif
+#if !SERIAL_PIOUART3_USED &&  defined(PIOUART3_RX_PIN)
+# undef PIOUART3_RX_PIN
+#endif
+#if SERIAL_PIOUART3_USED && !defined(PIOUART3_TX_PIN)
+# define PIOUART3_TX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART3_USED && defined(PIOUART3_TX_PIN)
+# warning "PIOUART3_TX_PIN is defined but PIOUART3 is not enabled"
+#endif
+#if !SERIAL_PIOUART3_USED &&  defined(PIOUART3_TX_PIN)
+# undef PIOUART3_TX_PIN
+#endif
+#if SERIAL_PIOUART4_USED && !defined(PIOUART4_RX_PIN)
+# define PIOUART4_RX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART4_USED && defined(PIOUART4_RX_PIN)
+# warning "PIOUART4_RX_PIN is defined but PIOUART4 is not enabled"
+#endif
+#if !SERIAL_PIOUART4_USED &&  defined(PIOUART4_RX_PIN)
+# undef PIOUART4_RX_PIN
+#endif
+#if SERIAL_PIOUART4_USED && !defined(PIOUART4_TX_PIN)
+# define PIOUART4_TX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART4_USED && defined(PIOUART4_TX_PIN)
+# warning "PIOUART4_TX_PIN is defined but PIOUART4 is not enabled"
+#endif
+#if !SERIAL_PIOUART4_USED &&  defined(PIOUART4_TX_PIN)
+# undef PIOUART4_TX_PIN
+#endif
+#if SERIAL_PIOUART5_USED && !defined(PIOUART5_RX_PIN)
+# define PIOUART5_RX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART5_USED && defined(PIOUART5_RX_PIN)
+# warning "PIOUART5_RX_PIN is defined but PIOUART5 is not enabled"
+#endif
+#if !SERIAL_PIOUART5_USED &&  defined(PIOUART5_RX_PIN)
+# undef PIOUART5_RX_PIN
+#endif
+#if SERIAL_PIOUART5_USED && !defined(PIOUART5_TX_PIN)
+# define PIOUART5_TX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART5_USED && defined(PIOUART5_TX_PIN)
+# warning "PIOUART5_TX_PIN is defined but PIOUART5 is not enabled"
+#endif
+#if !SERIAL_PIOUART5_USED &&  defined(PIOUART5_TX_PIN)
+# undef PIOUART5_TX_PIN
+#endif
+#if SERIAL_PIOUART6_USED && !defined(PIOUART6_RX_PIN)
+# define PIOUART6_RX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART6_USED && defined(PIOUART6_RX_PIN)
+# warning "PIOUART6_RX_PIN is defined but PIOUART6 is not enabled"
+#endif
+#if !SERIAL_PIOUART6_USED &&  defined(PIOUART6_RX_PIN)
+# undef PIOUART6_RX_PIN
+#endif
+#if SERIAL_PIOUART6_USED && !defined(PIOUART6_TX_PIN)
+# define PIOUART6_TX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART6_USED && defined(PIOUART6_TX_PIN)
+# warning "PIOUART6_TX_PIN is defined but PIOUART6 is not enabled"
+#endif
+#if !SERIAL_PIOUART6_USED &&  defined(PIOUART6_TX_PIN)
+# undef PIOUART6_TX_PIN
+#endif
+#if SERIAL_PIOUART7_USED && !defined(PIOUART7_RX_PIN)
+# define PIOUART7_RX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART7_USED && defined(PIOUART7_RX_PIN)
+# warning "PIOUART7_RX_PIN is defined but PIOUART7 is not enabled"
+#endif
+#if !SERIAL_PIOUART7_USED &&  defined(PIOUART7_RX_PIN)
+# undef PIOUART7_RX_PIN
+#endif
+#if SERIAL_PIOUART7_USED && !defined(PIOUART7_TX_PIN)
+# define PIOUART7_TX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART7_USED && defined(PIOUART7_TX_PIN)
+# warning "PIOUART7_TX_PIN is defined but PIOUART7 is not enabled"
+#endif
+#if !SERIAL_PIOUART7_USED &&  defined(PIOUART7_TX_PIN)
+# undef PIOUART7_TX_PIN
+#endif
+#if SERIAL_PIOUART8_USED && !defined(PIOUART8_RX_PIN)
+# define PIOUART8_RX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART8_USED && defined(PIOUART8_RX_PIN)
+# warning "PIOUART8_RX_PIN is defined but PIOUART8 is not enabled"
+#endif
+#if !SERIAL_PIOUART8_USED &&  defined(PIOUART8_RX_PIN)
+# undef PIOUART8_RX_PIN
+#endif
+#if SERIAL_PIOUART8_USED && !defined(PIOUART8_TX_PIN)
+# define PIOUART8_TX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART8_USED && defined(PIOUART8_TX_PIN)
+# warning "PIOUART8_TX_PIN is defined but PIOUART8 is not enabled"
+#endif
+#if !SERIAL_PIOUART8_USED &&  defined(PIOUART8_TX_PIN)
+# undef PIOUART8_TX_PIN
+#endif
+#if SERIAL_PIOUART9_USED && !defined(PIOUART9_RX_PIN)
+# define PIOUART9_RX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART9_USED && defined(PIOUART9_RX_PIN)
+# warning "PIOUART9_RX_PIN is defined but PIOUART9 is not enabled"
+#endif
+#if !SERIAL_PIOUART9_USED &&  defined(PIOUART9_RX_PIN)
+# undef PIOUART9_RX_PIN
+#endif
+#if SERIAL_PIOUART9_USED && !defined(PIOUART9_TX_PIN)
+# define PIOUART9_TX_PIN NONE
+#endif
+#if defined(WARN_UNUSED_SERIAL_PORT) && !SERIAL_PIOUART9_USED && defined(PIOUART9_TX_PIN)
+# warning "PIOUART9_TX_PIN is defined but PIOUART9 is not enabled"
+#endif
+#if !SERIAL_PIOUART9_USED &&  defined(PIOUART9_TX_PIN)
+# undef PIOUART9_TX_PIN
+#endif
+
 /****                                VCP                                 *****/
 
 #if defined(USE_VCP)
@@ -551,7 +976,7 @@ Configuration used:
 #define SERIAL_VCP_MAX (SERIAL_VCP_MASK ? LOG2(SERIAL_VCP_MASK) + 1 : 0)
 
 // normalize USE_x after all ports are enumerated (x_COUNT of dependencies must be available)
-#if !defined(USE_UART) && (SERIAL_UART_COUNT || SERIAL_LPUART_COUNT)
+#if !defined(USE_UART) && (SERIAL_UART_COUNT || SERIAL_LPUART_COUNT || SERIAL_PIOUART_COUNT)
 # define USE_UART
 #endif
 #if !defined(USE_LPUART) && (SERIAL_LPUART_COUNT)
@@ -560,7 +985,9 @@ Configuration used:
 #if !defined(USE_SOFTSERIAL) && (SERIAL_SOFTSERIAL_COUNT)
 # define USE_SOFTSERIAL
 #endif
+#if !defined(USE_PIOUART) && (SERIAL_PIOUART_COUNT)
+# define USE_PIOUART
+#endif
 #if !defined(USE_VCP) && (SERIAL_VCP_COUNT)
 # define USE_VCP
 #endif
-

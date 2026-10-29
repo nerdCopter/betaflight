@@ -72,6 +72,14 @@ void dshotInitEndpoints(const motorConfig_t *motorConfig, float outputLimit, flo
     }
 }
 
+DEFINE_SCALE_FN(scaleRangeDshotFromExternal, PWM_RANGE_MIN + 1, PWM_RANGE_MAX, DSHOT_MIN_THROTTLE, DSHOT_MAX_THROTTLE)
+DEFINE_SCALE_FN(scaleRangeDshotFromExternal3DNeg, PWM_RANGE_MIN, PWM_RANGE_MIDDLE - 1, DSHOT_3D_FORWARD_MIN_THROTTLE - 1, DSHOT_MIN_THROTTLE)
+DEFINE_SCALE_FN(scaleRangeDshotFromExternal3DPos, PWM_RANGE_MIDDLE + 1, PWM_RANGE_MAX, DSHOT_3D_FORWARD_MIN_THROTTLE, DSHOT_MAX_THROTTLE)
+
+DEFINE_SCALE_FN(scaleRangeDshotToExternal, DSHOT_MIN_THROTTLE, DSHOT_MAX_THROTTLE, PWM_RANGE_MIN + 1, PWM_RANGE_MAX)
+DEFINE_SCALE_FN(scaleRangeDshotToExternal3DNeg, DSHOT_MIN_THROTTLE, DSHOT_3D_FORWARD_MIN_THROTTLE - 1, PWM_RANGE_MIDDLE - 1, PWM_RANGE_MIN)
+DEFINE_SCALE_FN(scaleRangeDshotToExternal3DPos, DSHOT_3D_FORWARD_MIN_THROTTLE, DSHOT_MAX_THROTTLE, PWM_RANGE_MIDDLE + 1, PWM_RANGE_MAX)
+
 float dshotConvertFromExternal(uint16_t externalValue)
 {
     float motorValue;
@@ -82,12 +90,12 @@ float dshotConvertFromExternal(uint16_t externalValue)
         if (externalValue == PWM_RANGE_MIDDLE) {
             motorValue = DSHOT_CMD_MOTOR_STOP;
         } else if (externalValue < PWM_RANGE_MIDDLE) {
-            motorValue = scaleRangef(externalValue, PWM_RANGE_MIN, PWM_RANGE_MIDDLE - 1, DSHOT_3D_FORWARD_MIN_THROTTLE - 1, DSHOT_MIN_THROTTLE);
+            motorValue = scaleRangeDshotFromExternal3DNeg(externalValue);
         } else {
-            motorValue = scaleRangef(externalValue, PWM_RANGE_MIDDLE + 1, PWM_RANGE_MAX, DSHOT_3D_FORWARD_MIN_THROTTLE, DSHOT_MAX_THROTTLE);
+            motorValue = scaleRangeDshotFromExternal3DPos(externalValue);
         }
     } else {
-        motorValue = (externalValue == PWM_RANGE_MIN) ? DSHOT_CMD_MOTOR_STOP : scaleRangef(externalValue, PWM_RANGE_MIN + 1, PWM_RANGE_MAX, DSHOT_MIN_THROTTLE, DSHOT_MAX_THROTTLE);
+        motorValue = (externalValue == PWM_RANGE_MIN) ? DSHOT_CMD_MOTOR_STOP : scaleRangeDshotFromExternal(externalValue);
     }
 
     return motorValue;
@@ -101,12 +109,12 @@ uint16_t dshotConvertToExternal(float motorValue)
         if (motorValue == DSHOT_CMD_MOTOR_STOP || motorValue < DSHOT_MIN_THROTTLE) {
             externalValue = PWM_RANGE_MIDDLE;
         } else if (motorValue <= DSHOT_3D_FORWARD_MIN_THROTTLE - 1) {
-            externalValue = scaleRangef(motorValue, DSHOT_MIN_THROTTLE, DSHOT_3D_FORWARD_MIN_THROTTLE - 1, PWM_RANGE_MIDDLE - 1, PWM_RANGE_MIN);
+            externalValue = scaleRangeDshotToExternal3DNeg(motorValue);
         } else {
-            externalValue = scaleRangef(motorValue, DSHOT_3D_FORWARD_MIN_THROTTLE, DSHOT_MAX_THROTTLE, PWM_RANGE_MIDDLE + 1, PWM_RANGE_MAX);
+            externalValue = scaleRangeDshotToExternal3DPos(motorValue);
         }
     } else {
-        externalValue = (motorValue < DSHOT_MIN_THROTTLE) ? PWM_RANGE_MIN : scaleRangef(motorValue, DSHOT_MIN_THROTTLE, DSHOT_MAX_THROTTLE, PWM_RANGE_MIN + 1, PWM_RANGE_MAX);
+        externalValue = (motorValue < DSHOT_MIN_THROTTLE) ? PWM_RANGE_MIN : scaleRangeDshotToExternal(motorValue);
     }
 
     return lrintf(externalValue);
@@ -217,18 +225,18 @@ static void dshot_decode_telemetry_value(uint8_t motorIndex, uint32_t *pDecoded,
     uint16_t value = dshotTelemetryState.motorState[motorIndex].rawValue;
     bool isEdtEnabled = edtAlwaysDecode || (dshotTelemetryState.motorState[motorIndex].telemetryTypes & DSHOT_EXTENDED_TELEMETRY_MASK) != 0;
 
-    // https://github.com/bird-sanctuary/extended-dshot-telemetry   
+    // https://github.com/bird-sanctuary/extended-dshot-telemetry
     // Extract telemetry type field and check for eRPM conditions in one operation
     unsigned telemetryType = (value & 0x0f00) >> 8;  // 3 bits type + telemetry marker
     bool isErpm = !isEdtEnabled || (telemetryType & 0x01) || (telemetryType == 0);
-    
+
     if (isErpm) {
         *pDecoded = dshot_decode_eRPM_telemetry_value(value);
         *pType = DSHOT_TELEMETRY_TYPE_eRPM;
-        
+
         // Update debug buffer
         if (motorIndex < dshotMotorCount && motorIndex < DEBUG16_VALUE_COUNT) {
-            DEBUG_SET(DEBUG_DSHOT_RPM_TELEMETRY, motorIndex, *pDecoded);
+            DEBUG_SET(DEBUG_DSHOT_RPM_TELEMETRY, motorIndex, *pDecoded);  //!< [index:0..7] Motor {1|2|3|4|5|6|7|8} [unit:100eRPM]
         }
     } else {
         // Use lookup table for extended telemetry types
@@ -296,6 +304,10 @@ FAST_CODE_NOINLINE void updateDshotTelemetry(void)
     for (unsigned motor = 0; motor < dshotMotorCount; motor++) {
         motorFrequencyHz[motor] = pt1FilterApply(&motorFreqLpf[motor], erpmToHz * getDshotErpm(motor));
         minMotorFrequencyHz = MIN(minMotorFrequencyHz, motorFrequencyHz[motor]);
+
+        if (motor < DEBUG16_VALUE_COUNT) {
+            DEBUG_SET(DEBUG_RPM_FILTER, motor, lrintf(motorFrequencyHz[motor]));  //!< [index:0..7] Motor {1|2|3|4|5|6|7|8} Frequency [unit:Hz]
+        }
     }
 
     // Set state to processed
@@ -349,6 +361,28 @@ bool isDshotTelemetryActive(void)
 void dshotCleanTelemetryData(void)
 {
     memset(&dshotTelemetryState, 0, sizeof(dshotTelemetryState));
+}
+
+bool getDshotSensorData(escSensorData_t *dest, int motorIndex) {
+    // Check if DShot telemetry is active for this motor
+    if (!isDshotMotorTelemetryActive(motorIndex)) {
+        return false;
+    }
+
+    const dshotTelemetryMotorState_t *motorState = &dshotTelemetryState.motorState[motorIndex];
+
+    dest->rpm = motorState->telemetryData[DSHOT_TELEMETRY_TYPE_eRPM];
+
+    const bool edt = (motorState->telemetryTypes & DSHOT_EXTENDED_TELEMETRY_MASK) != 0;
+
+    // Extract telemetry data if available
+    dest->temperature = edt && (motorState->telemetryTypes & (1 << DSHOT_TELEMETRY_TYPE_TEMPERATURE)) ?
+        motorState->telemetryData[DSHOT_TELEMETRY_TYPE_TEMPERATURE] : 0;
+
+    dest->current = edt && (motorState->telemetryTypes & (1 << DSHOT_TELEMETRY_TYPE_CURRENT)) ?
+        motorState->telemetryData[DSHOT_TELEMETRY_TYPE_CURRENT] : 0;
+
+    return true;
 }
 
 #endif // USE_DSHOT_TELEMETRY

@@ -35,11 +35,12 @@
 
 #include "config/feature.h"
 
-#include "drivers/camera_control_impl.h"
+#include "drivers/camera_control.h"
 
 #include "config/config.h"
 #include "fc/core.h"
 #include "fc/rc.h"
+#include "fc/tasks.h"
 #include "fc/runtime_config.h"
 
 #include "flight/pid.h"
@@ -70,8 +71,9 @@
 
 // true if arming is done via the sticks (as opposed to a switch)
 static bool isUsingSticksToArm = true;
+static bool disarmUserRequested = false; // has the user requested a disarm, using either sticks or switches, whether armed or disarmed
 
-float rcCommand[4];           // interval [1000;2000] for THROTTLE and [-500;+500] for ROLL/PITCH/YAW
+float rcCommand[4];           // interval [0;1] for THROTTLE and [-1;1] for ROLL/PITCH/YAW
 
 PG_REGISTER_WITH_RESET_TEMPLATE(rcControlsConfig_t, rcControlsConfig, PG_RC_CONTROLS_CONFIG, 1);
 
@@ -105,17 +107,31 @@ bool isUsingSticksForArming(void)
     return isUsingSticksToArm;
 }
 
+bool wasLastDisarmUserRequested(void)
+{
+    return disarmUserRequested;
+}
+
+void clearWasLastDisarmUserRequested(void)
+{
+    disarmUserRequested = false;
+}
+
+
 throttleStatus_e calculateThrottleStatus(void)
 {
+    const float throttle = rcGetChannel(THROTTLE);
+    const float mincheck = rcUsToNorm(rxConfig()->mincheck);
+
     if (featureIsEnabled(FEATURE_3D)) {
         if (IS_RC_MODE_ACTIVE(BOX3D) || flight3DConfig()->switched_mode3d) {
-            if (rcData[THROTTLE] < rxConfig()->mincheck) {
+            if (throttle < mincheck) {
                 return THROTTLE_LOW;
             }
-        } else if ((rcData[THROTTLE] > (rxConfig()->midrc - flight3DConfig()->deadband3d_throttle) && rcData[THROTTLE] < (rxConfig()->midrc + flight3DConfig()->deadband3d_throttle))) {
+        } else if (fabsf(throttle - rcUsToNorm(rxConfig()->midrc)) < rcUsSpanToNorm(flight3DConfig()->deadband3d_throttle)) {
             return THROTTLE_LOW;
         }
-    } else if (rcData[THROTTLE] < rxConfig()->mincheck) {
+    } else if (throttle < mincheck) {
         return THROTTLE_LOW;
     }
 
@@ -142,13 +158,15 @@ void processRcStickPositions(void)
     static bool pendingApplyRollAndPitchTrimDeltaSave = false;
 
     // checking sticks positions
+    const float mincheck = rcUsToNorm(rxConfig()->mincheck);
+    const float maxcheck = rcUsToNorm(rxConfig()->maxcheck);
     uint8_t stTmp = 0;
     for (int i = 0; i < 4; i++) {
         stTmp >>= 2;
-        if (rcData[i] > rxConfig()->mincheck) {
+        if (rcGetChannel(i) > mincheck) {
             stTmp |= 0x80;  // check for MIN
         }
-        if (rcData[i] < rxConfig()->maxcheck) {
+        if (rcGetChannel(i) < maxcheck) {
             stTmp |= 0x40;  // check for MAX
         }
     }
@@ -171,6 +189,7 @@ void processRcStickPositions(void)
         } else {
             resetTryingToArm();
             // Disarming via ARM BOX
+              disarmUserRequested = true;
             resetArmingDisabled();
             const bool boxFailsafeSwitchIsOn = IS_RC_MODE_ACTIVE(BOXFAILSAFE);
             if (ARMING_FLAG(ARMED) && (failsafeIsReceivingRxData() || boxFailsafeSwitchIsOn)) {
@@ -190,10 +209,11 @@ void processRcStickPositions(void)
         if (rcDelayMs >= ARM_DELAY_MS && !doNotRepeat) {
             doNotRepeat = true;
             // Disarm on throttle down + yaw
+             disarmUserRequested = true;
             resetTryingToArm();
-            if (ARMING_FLAG(ARMED))
+            if (ARMING_FLAG(ARMED)){
                 disarm(DISARM_REASON_STICKS);
-            else {
+           } else {
                 beeper(BEEPER_DISARM_REPEAT);     // sound tone while stick held
                 repeatAfter(STICK_AUTOREPEAT_MS); // disarm tone will repeat
 
@@ -414,4 +434,8 @@ void rcControlsInit(void)
 {
     analyzeModeActivationConditions();
     isUsingSticksToArm = !isModeActivationConditionPresent(BOXARM) && systemConfig()->enableStickArming;
+    // Mode ranges change live over MSP, so any task gated on a mode being assigned has to
+    // be re-evaluated here rather than only at boot. Safe before tasksInit(), which starts
+    // by clearing the scheduler queue and re-enabling everything.
+    tasksUpdateModeGatedEnables();
 }

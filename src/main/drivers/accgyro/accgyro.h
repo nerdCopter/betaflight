@@ -34,7 +34,7 @@
 #include "drivers/sensor.h"
 
 #pragma GCC diagnostic push
-#if defined(SIMULATOR_BUILD) && defined(SIMULATOR_MULTITHREAD)
+#if ENABLE_SIMULATOR_MULTITHREAD
 #include <pthread.h>
 #endif
 
@@ -66,7 +66,14 @@ typedef enum {
     GYRO_ICM45686,
     GYRO_ICM40609D,
     GYRO_IIM42652,
-    GYRO_VIRTUAL
+    GYRO_LSM6DSK320X,
+    GYRO_ICM42622P,
+    GYRO_ICM42686P,
+    GYRO_ICM56686,
+    GYRO_BMI423,
+    GYRO_VIRTUAL,
+    GYRO_LSM6DSV32X,
+    GYRO_HARDWARE_COUNT
 } gyroHardware_e;
 
 typedef enum {
@@ -98,7 +105,7 @@ typedef enum {
 } gyroModeSPI_e;
 
 typedef struct gyroDev_s {
-#if defined(SIMULATOR_BUILD) && defined(SIMULATOR_MULTITHREAD)
+#if ENABLE_SIMULATOR_MULTITHREAD
     pthread_mutex_t lock;
 #endif
     sensorGyroInitFuncPtr initFn;                             // initialize function
@@ -112,6 +119,8 @@ typedef struct gyroDev_s {
     int32_t gyroADCRawPrevious[XYZ_AXIS_COUNT];
     int16_t gyroADCRaw[XYZ_AXIS_COUNT];                      // raw data from sensor
     int16_t temperature;
+    float tempScale;
+    float tempZero;
     mpuDetectionResult_t mpuDetectionResult;
     sensor_align_e gyroAlign;
     gyroRateKHz_e gyroRateKHz;
@@ -122,6 +131,13 @@ typedef struct gyroDev_s {
     int32_t gyroShortPeriod;
     int32_t gyroDmaMaxDuration;
     busSegment_t segments[2];
+    uint8_t dmaStallCount;
+#if defined(USE_ACCGYRO_LSM6DSV16X) || defined(USE_ACCGYRO_LSM6DSV32X) || defined(USE_ACCGYRO_LSM6DSK320X)
+    // Completed samples are separate from the buffer being written by SPI DMA.
+    uint32_t lsm6dsvDmaSequence;
+    int16_t lsm6dsvDmaSample[2 * XYZ_AXIS_COUNT];
+    bool lsm6dsvDmaReady;
+#endif
     volatile bool dataReady;
     bool gyro_high_fsr;
     uint8_t hardware_lpf;
@@ -135,10 +151,12 @@ typedef struct gyroDev_s {
     uint16_t accSampleRateHz;
     uint8_t accDataReg;
     uint8_t gyroDataReg;
+    uint8_t tempDataReg;
+    uint8_t dmaReadRegStart;
 } gyroDev_t;
 
 typedef struct accDev_s {
-#if defined(SIMULATOR_BUILD) && defined(SIMULATOR_MULTITHREAD)
+#if ENABLE_SIMULATOR_MULTITHREAD
     pthread_mutex_t lock;
 #endif
     float acc_1G_rec;
@@ -158,7 +176,7 @@ typedef struct accDev_s {
 
 static inline void accDevLock(accDev_t *acc)
 {
-#if defined(SIMULATOR_BUILD) && defined(SIMULATOR_MULTITHREAD)
+#if ENABLE_SIMULATOR_MULTITHREAD
     pthread_mutex_lock(&acc->lock);
 #else
     (void)acc;
@@ -167,7 +185,7 @@ static inline void accDevLock(accDev_t *acc)
 
 static inline void accDevUnLock(accDev_t *acc)
 {
-#if defined(SIMULATOR_BUILD) && defined(SIMULATOR_MULTITHREAD)
+#if ENABLE_SIMULATOR_MULTITHREAD
     pthread_mutex_unlock(&acc->lock);
 #else
     (void)acc;
@@ -176,7 +194,7 @@ static inline void accDevUnLock(accDev_t *acc)
 
 static inline void gyroDevLock(gyroDev_t *gyro)
 {
-#if defined(SIMULATOR_BUILD) && defined(SIMULATOR_MULTITHREAD)
+#if ENABLE_SIMULATOR_MULTITHREAD
     pthread_mutex_lock(&gyro->lock);
 #else
     (void)gyro;
@@ -185,7 +203,7 @@ static inline void gyroDevLock(gyroDev_t *gyro)
 
 static inline void gyroDevUnLock(gyroDev_t *gyro)
 {
-#if defined(SIMULATOR_BUILD) && defined(SIMULATOR_MULTITHREAD)
+#if ENABLE_SIMULATOR_MULTITHREAD
     pthread_mutex_unlock(&gyro->lock);
 #else
     (void)gyro;

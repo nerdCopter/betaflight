@@ -77,7 +77,7 @@
 #include "frsky_hub.h"
 
 static serialPort_t *frSkyHubPort = NULL;
-static const serialPortConfig_t *portConfig = NULL;
+static serialPortIdentifier_e telemetryPort = SERIAL_PORT_NONE;
 
 #define FRSKY_HUB_BAUDRATE 9600
 #define FRSKY_HUB_INITIAL_PORT_MODE MODE_TX
@@ -197,13 +197,13 @@ static void sendThrottleOrBatterySizeAsRpm(void)
 #else
     if (ARMING_FLAG(ARMED)) {
         const throttleStatus_e throttleStatus = calculateThrottleStatus();
-        uint16_t throttleForRPM = rcCommand[THROTTLE] / BLADE_NUMBER_DIVIDER;
+        uint16_t throttleForRPM = rcThrottleToUs(rcCommand[THROTTLE]) / BLADE_NUMBER_DIVIDER;
         if (throttleStatus == THROTTLE_LOW && featureIsEnabled(FEATURE_MOTOR_STOP)) {
             throttleForRPM = 0;
         }
         data = throttleForRPM;
     } else {
-        data = (batteryConfig()->batteryCapacity / BLADE_NUMBER_DIVIDER);
+        data = (currentBatteryProfile->batteryCapacity / BLADE_NUMBER_DIVIDER);
     }
 #endif
 
@@ -324,12 +324,12 @@ static void sendFakeLatLong(void)
 
 static void sendGPSLatLong(void)
 {
-    static uint8_t gpsFixOccured = 0;
+    static uint8_t gpsFixOccurred = 0;
     int32_t coord[2] = {0,0};
 
-    if (STATE(GPS_FIX) || gpsFixOccured == 1) {
+    if (STATE(GPS_FIX) || gpsFixOccurred == 1) {
         // If we have ever had a fix, send the last known lat/long
-        gpsFixOccured = 1;
+        gpsFixOccurred = 1;
         coord[GPS_LATITUDE] = gpsSol.llh.lat;
         coord[GPS_LONGITUDE] = gpsSol.llh.lon;
         sendLatLong(coord);
@@ -420,7 +420,7 @@ static void sendAmperage(void)
 static void sendFuelLevel(void)
 {
     int16_t data;
-    if (batteryConfig()->batteryCapacity > 0) {
+    if (currentBatteryProfile->batteryCapacity > 0) {
         data = (uint16_t)calculateBatteryPercentageRemaining();
     } else {
         data = (uint16_t)constrain(getMAhDrawn(), 0, 0xFFFF);
@@ -450,9 +450,9 @@ static void sendHeading(void)
 bool initFrSkyHubTelemetry(void)
 {
     if (telemetryState == TELEMETRY_STATE_UNINITIALIZED) {
-        portConfig = findSerialPortConfig(FUNCTION_TELEMETRY_FRSKY_HUB);
-        if (portConfig) {
-            frSkyHubPortSharing = determinePortSharing(portConfig, FUNCTION_TELEMETRY_FRSKY_HUB);
+        telemetryPort = telemetryProviderPort(TELEMETRY_PROTOCOL_FRSKY_HUB);
+        if (telemetryPort != SERIAL_PORT_NONE) {
+            frSkyHubPortSharing = determinePortSharing(telemetryPort, FUNCTION_TELEMETRY_FRSKY_HUB);
 
             frSkyHubWriteByte = frSkyHubWriteByteInternal;
 
@@ -486,15 +486,15 @@ static void freeFrSkyHubTelemetryPort(void)
 
 static void configureFrSkyHubTelemetryPort(void)
 {
-    if (portConfig) {
-        frSkyHubPort = openSerialPort(portConfig->identifier, FUNCTION_TELEMETRY_FRSKY_HUB, NULL, NULL, FRSKY_HUB_BAUDRATE, FRSKY_HUB_INITIAL_PORT_MODE, telemetryConfig()->telemetry_inverted ? SERIAL_NOT_INVERTED : SERIAL_INVERTED);
+    if (telemetryPort != SERIAL_PORT_NONE) {
+        frSkyHubPort = openSerialPort(telemetryPort, FUNCTION_TELEMETRY_FRSKY_HUB, NULL, NULL, FRSKY_HUB_BAUDRATE, FRSKY_HUB_INITIAL_PORT_MODE, telemetryConfig()->telemetry_inverted ? SERIAL_NOT_INVERTED : SERIAL_INVERTED);
     }
 }
 
 void checkFrSkyHubTelemetryState(void)
 {
     if (telemetryState == TELEMETRY_STATE_INITIALIZED_SERIAL) {
-        if (telemetryCheckRxPortShared(portConfig, rxRuntimeState.serialrxProvider)) {
+        if (telemetryCheckRxPortShared(telemetryPort, rxRuntimeState.serialrxProvider)) {
             if (frSkyHubPort == NULL && telemetrySharedPort != NULL) {
                 frSkyHubPort = telemetrySharedPort;
             }

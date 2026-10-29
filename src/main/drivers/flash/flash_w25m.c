@@ -199,7 +199,7 @@ static void w25m_eraseCompletely(flashDevice_t *fdevice)
 static uint32_t currentWriteAddress;
 static int currentWriteDie;
 
-static void w25m_pageProgramBegin(flashDevice_t *fdevice, uint32_t address, void (*callback)(uint32_t length))
+static void w25m_pageProgramBegin(flashDevice_t *fdevice, uint32_t address, void (*callback)(uintptr_t arg))
 {
     currentWriteDie = address / dieSize;
     w25m_dieSelect(fdevice->io.handle.dev, currentWriteDie);
@@ -221,7 +221,7 @@ static void w25m_pageProgramFinish(flashDevice_t *fdevice)
     dieDevice[currentWriteDie].vTable->pageProgramFinish(&dieDevice[currentWriteDie]);
 }
 
-static void w25m_pageProgram(flashDevice_t *fdevice, uint32_t address, const uint8_t *data, uint32_t length, void (*callback)(uint32_t length))
+static void w25m_pageProgram(flashDevice_t *fdevice, uint32_t address, const uint8_t *data, uint32_t length, void (*callback)(uintptr_t arg))
 {
     w25m_pageProgramBegin(fdevice, address, callback);
 
@@ -232,30 +232,31 @@ static void w25m_pageProgram(flashDevice_t *fdevice, uint32_t address, const uin
 
 static int w25m_readBytes(flashDevice_t *fdevice, uint32_t address, uint8_t *buffer, uint32_t length)
 {
-    int rlen; // remaining length
-    int tlen; // transfer length for a round
-    int rbytes;
+    uint32_t bytesRead = 0;
 
-    // Divide a read that spans multiple dies into two.
-    // The loop is executed twice at the most for decent 'length'.
+    // Split the read at die boundaries. A die driver is also free to return a short count
+    // (w25n_readBytes clamps every transfer to the enclosing NAND page), so advance by the
+    // number of bytes it reports rather than by the length requested from it.
 
-    for (rlen = length; rlen; rlen -= tlen) {
-        int dieNumber = address / dieSize;
-        uint32_t dieAddress = address % dieSize;
-        tlen = MIN(dieAddress + rlen, dieSize) - dieAddress;
+    while (bytesRead < length) {
+        const int dieNumber = address / dieSize;
+        const uint32_t dieAddress = address % dieSize;
+        const uint32_t tlen = MIN(length - bytesRead, dieSize - dieAddress);
 
         w25m_dieSelect(fdevice->io.handle.dev, dieNumber);
 
-        rbytes = dieDevice[dieNumber].vTable->readBytes(&dieDevice[dieNumber], dieAddress, buffer, tlen);
+        const int rbytes = dieDevice[dieNumber].vTable->readBytes(&dieDevice[dieNumber], dieAddress, buffer, tlen);
 
-        if (!rbytes) {
-            return 0;
+        if (rbytes <= 0) {
+            break;
         }
 
-        address += tlen;
-        buffer += tlen;
+        address += rbytes;
+        buffer += rbytes;
+        bytesRead += rbytes;
     }
-    return length;
+
+    return bytesRead;
 }
 
 static const flashGeometry_t* w25m_getGeometry(flashDevice_t *fdevice)

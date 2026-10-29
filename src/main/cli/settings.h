@@ -34,6 +34,13 @@ typedef enum {
     TABLE_GPS_UBLOX_MODELS,
     TABLE_GPS_UBLOX_UTC_STANDARD,
 #endif
+#ifndef USE_WING
+    TABLE_AP_YAW_MODE,
+#endif
+#if !defined(USE_WING) || ENABLE_FLIGHT_PLAN
+    TABLE_AP_RX_LOSS_POLICY,
+    TABLE_AP_GEOFENCE_ACTION,
+#endif
 #ifdef USE_GPS_RESCUE
     TABLE_GPS_RESCUE_SANITY_CHECK,
     TABLE_GPS_RESCUE_ALT_MODE,
@@ -88,6 +95,12 @@ typedef enum {
 #ifdef USE_OPTICALFLOW
     TABLE_OPTICALFLOW_HARDWARE,
 #endif
+#ifdef USE_PITOT
+    TABLE_PITOT_HARDWARE,
+#endif
+#ifdef USE_POSITION_HOLD
+    TABLE_POSHOLD_SOURCE,
+#endif
 #ifdef USE_GYRO_OVERFLOW_CHECK
     TABLE_GYRO_OVERFLOW_CHECK,
 #endif
@@ -115,7 +128,6 @@ typedef enum {
 #ifdef USE_VTX_COMMON
     TABLE_VTX_LOW_POWER_DISARM,
 #endif
-    TABLE_GYRO_HARDWARE,
 #ifdef USE_SDCARD
     TABLE_SDCARD_MODE,
 #endif
@@ -134,8 +146,14 @@ typedef enum {
     TABLE_FEEDFORWARD_AVERAGING,
     TABLE_DSHOT_BITBANGED_TIMER,
     TABLE_OSD_DISPLAYPORT_DEVICE,
+#ifdef USE_VTX_COMMON
+    TABLE_VTX_TYPE,
+#endif
 #ifdef USE_OSD
     TABLE_OSD_LOGO_ON_ARMING,
+#if ENABLE_OSD_CUSTOM_TEXT
+    TABLE_OSD_CUSTOM_TEXT_TERMINATOR,
+#endif
 #endif
     TABLE_MIXER_TYPE,
     TABLE_SIMPLIFIED_TUNING_PIDS_MODE,
@@ -151,7 +169,15 @@ typedef enum {
 #ifdef USE_WING
     TABLE_TPA_SPEED_TYPE,
     TABLE_YAW_TYPE,
+    TABLE_LOITER_DIRECTION,
 #endif // USE_WING
+#ifdef USE_TRANSPONDER
+    TABLE_TRANSPONDER_PROVIDER,
+#endif
+    TABLE_BAUD_RATE,
+#ifdef USE_TELEMETRY
+    TABLE_TELEMETRY_PROTOCOL,
+#endif
     LOOKUP_TABLE_COUNT
 } lookupTableIndex_e;
 
@@ -162,7 +188,7 @@ typedef struct lookupTableEntry_s {
 
 #define VALUE_TYPE_OFFSET 0
 #define VALUE_SECTION_OFFSET 3
-#define VALUE_MODE_OFFSET 5
+#define VALUE_MODE_OFFSET 6
 
 typedef enum {
     // value type, bits 0-2
@@ -173,23 +199,41 @@ typedef enum {
     VAR_UINT32 = (4 << VALUE_TYPE_OFFSET),
     VAR_INT32 = (5 << VALUE_TYPE_OFFSET),
 
-    // value section, bits 3-4
+    // value section, bits 3-5
     MASTER_VALUE = (0 << VALUE_SECTION_OFFSET),
     PROFILE_VALUE = (1 << VALUE_SECTION_OFFSET),
     PROFILE_RATE_VALUE = (2 << VALUE_SECTION_OFFSET),
     HARDWARE_VALUE = (3 << VALUE_SECTION_OFFSET), // Part of the master section, but used for the hardware definition
+    PROFILE_BATTERY_VALUE = (4 << VALUE_SECTION_OFFSET),
 
-    // value mode, bits 5-7
+    // value mode, bits 6-8
     MODE_DIRECT = (0 << VALUE_MODE_OFFSET),
     MODE_LOOKUP = (1 << VALUE_MODE_OFFSET),
     MODE_ARRAY = (2 << VALUE_MODE_OFFSET),
     MODE_BITSET = (3 << VALUE_MODE_OFFSET),
     MODE_STRING = (4 << VALUE_MODE_OFFSET),
+    // Sparse enum shown by name.  A lookup table cannot index these, so the
+    // owning subsystem supplies the name/value conversion via the registry
+    // below and the setting stores the raw identifier.
+    MODE_LOOKUP_IDENTIFIER = (5 << VALUE_MODE_OFFSET),
 } cliValueFlag_e;
 
+typedef enum {
+    IDENTIFIER_LOOKUP_SERIAL_PORT = 0,
+    IDENTIFIER_LOOKUP_COUNT
+} identifierLookupIndex_e;
+
+typedef struct identifierLookupEntry_s {
+    const char *(*nameOf)(int value);              // NULL when the value is unknown
+    bool (*valueOf)(const char *name, int *value);
+    const char *(*nameAt)(unsigned index);         // enumeration, NULL past the end
+} identifierLookupEntry_t;
+
+extern const identifierLookupEntry_t identifierLookups[IDENTIFIER_LOOKUP_COUNT];
+
 #define VALUE_TYPE_MASK (0x07)
-#define VALUE_SECTION_MASK (0x18)
-#define VALUE_MODE_MASK (0xE0)
+#define VALUE_SECTION_MASK (0x38)
+#define VALUE_MODE_MASK (0x1C0)
 
 typedef struct cliMinMaxConfig_s {
     const int16_t min;
@@ -204,6 +248,10 @@ typedef struct cliMinMaxUnsignedConfig_s {
 typedef struct cliLookupTableConfig_s {
     const lookupTableIndex_e tableIndex;
 } cliLookupTableConfig_t;
+
+typedef struct cliIdentifierLookupConfig_s {
+    const uint8_t lookupIndex;                // identifierLookupIndex_e
+} cliIdentifierLookupConfig_t;
 
 typedef struct cliArrayLengthConfig_s {
     const uint8_t length;
@@ -220,6 +268,7 @@ typedef struct cliStringLengthConfig_s {
 
 typedef union {
     cliLookupTableConfig_t lookup;            // used for MODE_LOOKUP excl. VAR_UINT32
+    cliIdentifierLookupConfig_t identifier;   // used for MODE_LOOKUP_IDENTIFIER
     cliMinMaxConfig_t minmax;                 // used for MODE_DIRECT with signed parameters
     cliMinMaxUnsignedConfig_t minmaxUnsigned; // used for MODE_DIRECT with unsigned parameters
     cliArrayLengthConfig_t array;             // used for MODE_ARRAY
@@ -237,7 +286,7 @@ typedef union {
 
 typedef struct clivalue_s {
     const char *name;
-    const uint8_t type;                       // see cliValueFlag_e
+    const uint16_t type;                      // see cliValueFlag_e
     const cliValueConfig_t config;
 
     pgn_t pgn;
@@ -250,20 +299,6 @@ extern const uint16_t valueTableEntryCount;
 extern const clivalue_t valueTable[];
 //extern const uint8_t lookupTablesEntryCount;
 
-extern const char * const lookupTableGyroHardware[];
-
-extern const char * const lookupTableAccHardware[];
-//extern const uint8_t lookupTableAccHardwareEntryCount;
-
-extern const char * const lookupTableBaroHardware[];
-//extern const uint8_t lookupTableBaroHardwareEntryCount;
-
-extern const char * const lookupTableMagHardware[];
-//extern const uint8_t lookupTableMagHardwareEntryCount;
-
-extern const char * const lookupTableRangefinderHardware[];
-
-extern const char * const lookupTableOpticalflowHardware[];
 
 extern const char * const lookupTableLedstripColors[];
 

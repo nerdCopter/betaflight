@@ -141,7 +141,7 @@ bool rtc6705IOInit(const vtxIOConfig_t *vtxIOConfig)
 #endif
 
     // RTC6705 when using SOFT SPI driver doesn't use an SPI device, so don't attempt to initialise an spiInstance.
-    SPI_TypeDef *spiInstance = spiInstanceByDevice(SPI_CFG_TO_DEV(vtxIOConfig->spiDevice));
+    spiResource_t *spiInstance = spiInstanceByDevice(SPI_CFG_TO_DEV(vtxIOConfig->spiDevice));
     if (spiInstance && spiSetBusInstance(&devInstance, vtxIOConfig->spiDevice)) {
         dev = &devInstance;
         dev->busType_u.spi.csnPin = csnPin;

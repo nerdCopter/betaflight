@@ -31,9 +31,11 @@
 #include "common/maths.h"
 
 #include "drivers/bus.h"
+#include "drivers/bus_spi_types.h"
 #include "drivers/bus_spi.h"
 #include "drivers/bus_spi_impl.h"
 #include "drivers/dma.h"
+#include "platform/dma.h"
 #include "drivers/io.h"
 #include "platform/rcc.h"
 
@@ -68,13 +70,15 @@ static uint32_t spiDivisorToBRbits(const SPI_TypeDef *instance, uint16_t divisor
     return (ffs(divisor) - 2) << 3;// SPI_CR1_BR_Pos
 }
 
-void spiInitDevice(SPIDevice device)
+void spiInitDevice(spiDevice_e device)
 {
     spiDevice_t *spi = &spiDevice[device];
 
     if (!spi->dev) {
         return;
     }
+
+    SPI_TypeDef *dev = (SPI_TypeDef *)spi->dev;
 
     // Enable SPI clock
     RCC_ClockCmd(spi->rcc, ENABLE);
@@ -88,18 +92,19 @@ void spiInitDevice(SPIDevice device)
     IOConfigGPIOAF(IOGetByTag(spi->mosi), SPI_IO_AF_CFG, spi->mosiAF);
     IOConfigGPIOAF(IOGetByTag(spi->sck), SPI_IO_AF_SCK_CFG_HIGH, spi->sckAF);
 
-    DDL_SPI_Disable(spi->dev);
-    DDL_SPI_DeInit(spi->dev);
+    DDL_SPI_Disable(dev);
+    DDL_SPI_DeInit(dev);
 
-    DDL_SPI_DisableDMAReq_RX(spi->dev);
-    DDL_SPI_DisableDMAReq_TX(spi->dev);
+    DDL_SPI_DisableDMAReq_RX(dev);
+    DDL_SPI_DisableDMAReq_TX(dev);
 
-    DDL_SPI_Init(spi->dev, &defaultInit);
-    DDL_SPI_Enable(spi->dev);
+    DDL_SPI_Init(dev, &defaultInit);
+    DDL_SPI_Enable(dev);
 }
 
 void spiInternalResetDescriptors(busDevice_t *bus)
 {
+    SPI_TypeDef *instance = (SPI_TypeDef *)bus->busType_u.spi.instance;
     DDL_DMA_InitTypeDef *dmaInitTx = bus->dmaInitTx;
 
     DDL_DMA_StructInit(dmaInitTx);
@@ -107,7 +112,7 @@ void spiInternalResetDescriptors(busDevice_t *bus)
     dmaInitTx->Channel = bus->dmaTx->channel;
     dmaInitTx->Mode = DDL_DMA_MODE_NORMAL;
     dmaInitTx->Direction = DDL_DMA_DIRECTION_MEMORY_TO_PERIPH;
-    dmaInitTx->PeriphOrM2MSrcAddress = (uint32_t)&bus->busType_u.spi.instance->DATA;
+    dmaInitTx->PeriphOrM2MSrcAddress = (uint32_t)&instance->DATA;
     dmaInitTx->Priority = DDL_DMA_PRIORITY_LOW;
     dmaInitTx->PeriphOrM2MSrcIncMode  = DDL_DMA_PERIPH_NOINCREMENT;
     dmaInitTx->PeriphOrM2MSrcDataSize = DDL_DMA_PDATAALIGN_BYTE;
@@ -121,8 +126,8 @@ void spiInternalResetDescriptors(busDevice_t *bus)
         dmaInitRx->Channel = bus->dmaRx->channel;
         dmaInitRx->Mode = DDL_DMA_MODE_NORMAL;
         dmaInitRx->Direction = DDL_DMA_DIRECTION_PERIPH_TO_MEMORY;
-        dmaInitRx->PeriphOrM2MSrcAddress = (uint32_t)&bus->busType_u.spi.instance->DATA;
-        dmaInitRx->Priority = DDL_DMA_PRIORITY_LOW;
+        dmaInitRx->PeriphOrM2MSrcAddress = (uint32_t)&instance->DATA;
+        dmaInitRx->Priority = DDL_DMA_PRIORITY_MEDIUM;
         dmaInitRx->PeriphOrM2MSrcIncMode  = DDL_DMA_PERIPH_NOINCREMENT;
         dmaInitRx->PeriphOrM2MSrcDataSize = DDL_DMA_PDATAALIGN_BYTE;
     }
@@ -138,8 +143,9 @@ void spiInternalResetStream(dmaChannelDescriptor_t *descriptor)
     DMA_CLEAR_FLAG(descriptor, DMA_IT_HTIF | DMA_IT_TEIF | DMA_IT_TCIF);
 }
 
-FAST_CODE bool spiInternalReadWriteBufPolled(SPI_TypeDef *instance, const uint8_t *txData, uint8_t *rxData, int len)
+FAST_CODE bool spiInternalReadWriteBufPolled(spiResource_t *spiInstance, const uint8_t *txData, uint8_t *rxData, int len)
 {
+    SPI_TypeDef *instance = (SPI_TypeDef *)spiInstance;
     while (len) {
         while (!DDL_SPI_IsActiveFlag_TXE(instance));
         uint8_t b = txData ? *(txData++) : 0xFF;
@@ -198,6 +204,7 @@ void spiInternalInitStream(const extDevice_t *dev, volatile busSegment_t *segmen
 void spiInternalStartDMA(const extDevice_t *dev)
 {
     busDevice_t *bus = dev->bus;
+    SPI_TypeDef *instance = (SPI_TypeDef *)bus->busType_u.spi.instance;
 
     dmaChannelDescriptor_t *dmaTx = bus->dmaTx;
     dmaChannelDescriptor_t *dmaRx = bus->dmaRx;
@@ -209,6 +216,7 @@ void spiInternalStartDMA(const extDevice_t *dev)
 
         // Use the correct callback argument
         dmaRx->userParam = (uint32_t)dev;
+        dmaTx->userParam = (uint32_t)dev;
 
         // Clear transfer flags
         DMA_CLEAR_FLAG(dmaTx, DMA_IT_HTIF | DMA_IT_TEIF | DMA_IT_TCIF);
@@ -222,6 +230,8 @@ void spiInternalStartDMA(const extDevice_t *dev)
          * occurs earlier when the Tx FIFO is empty, but the SPI operation is still in progress
          */
         DDL_EX_DMA_EnableIT_TC(streamRegsRx);
+        DDL_EX_DMA_EnableIT_TE(streamRegsRx);
+        DDL_EX_DMA_EnableIT_TE(streamRegsTx);
 
         // Update streams
         DDL_DMA_Init(dmaTx->dma, dmaTx->stream, bus->dmaInitTx);
@@ -240,7 +250,7 @@ void spiInternalStartDMA(const extDevice_t *dev)
         DDL_DMA_EnableStream(dmaTx->dma, dmaTx->stream);
         DDL_DMA_EnableStream(dmaRx->dma, dmaRx->stream);
 
-        SET_BIT(dev->bus->busType_u.spi.instance->CTRL2, SPI_CTRL2_TXDEN | SPI_CTRL2_RXDEN);
+        SET_BIT(instance->CTRL2, SPI_CTRL2_TXDEN | SPI_CTRL2_RXDEN);
     } else {
         // Use the correct callback argument
         dmaTx->userParam = (uint32_t)dev;
@@ -252,6 +262,7 @@ void spiInternalStartDMA(const extDevice_t *dev)
         DDL_DMA_WriteReg(streamRegsTx, SCFG, 0U);
 
         DDL_EX_DMA_EnableIT_TC(streamRegsTx);
+        DDL_EX_DMA_EnableIT_TE(streamRegsTx);
 
         // Update streams
         DDL_DMA_Init(dmaTx->dma, dmaTx->stream, bus->dmaInitTx);
@@ -267,7 +278,7 @@ void spiInternalStartDMA(const extDevice_t *dev)
         // Enable streams
         DDL_DMA_EnableStream(dmaTx->dma, dmaTx->stream);
 
-        SET_BIT(dev->bus->busType_u.spi.instance->CTRL2, SPI_CTRL2_TXDEN);
+        SET_BIT(instance->CTRL2, SPI_CTRL2_TXDEN);
     }
 }
 
@@ -277,7 +288,7 @@ void spiInternalStopDMA (const extDevice_t *dev)
 
     dmaChannelDescriptor_t *dmaTx = bus->dmaTx;
     dmaChannelDescriptor_t *dmaRx = bus->dmaRx;
-    SPI_TypeDef *instance = bus->busType_u.spi.instance;
+    SPI_TypeDef *instance = (SPI_TypeDef *)bus->busType_u.spi.instance;
 
     if (dmaRx) {
         // Disable the DMA engine and SPI interface
@@ -290,7 +301,6 @@ void spiInternalStopDMA (const extDevice_t *dev)
         DDL_SPI_DisableDMAReq_TX(instance);
         DDL_SPI_DisableDMAReq_RX(instance);
     } else {
-        SPI_TypeDef *instance = bus->busType_u.spi.instance;
 
         // Ensure the current transmission is complete
         while (DDL_SPI_IsActiveFlag_BSY(instance));
@@ -309,12 +319,28 @@ void spiInternalStopDMA (const extDevice_t *dev)
     }
 }
 
+void spiInternalAbortDMA(const extDevice_t *dev)
+{
+    SPI_TypeDef *instance = (SPI_TypeDef *)dev->bus->busType_u.spi.instance;
+
+    spiInternalStopDMA(dev);
+
+    while (DDL_SPI_IsActiveFlag_BSY(instance));
+
+    while (DDL_SPI_IsActiveFlag_RXNE(instance)) {
+        instance->DATA;
+    }
+
+    // An overrun discards everything received after it until cleared
+    DDL_SPI_ClearFlag_OVR(instance);
+}
+
 // DMA transfer setup and start
 FAST_CODE void spiSequenceStart(const extDevice_t *dev)
 {
     busDevice_t *bus = dev->bus;
-    SPI_TypeDef *instance = bus->busType_u.spi.instance;
-    spiDevice_t *spi = &spiDevice[spiDeviceByInstance(instance)];
+    SPI_TypeDef *instance = (SPI_TypeDef *)bus->busType_u.spi.instance;
+    spiDevice_t *spi = &spiDevice[spiDeviceByInstance(bus->busType_u.spi.instance)];
     bool dmaSafe = dev->useDMA;
     uint32_t xferLen = 0;
     uint32_t segmentCount = 0;

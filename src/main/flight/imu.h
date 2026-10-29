@@ -54,6 +54,9 @@ typedef union {
 } attitudeEulerAngles_t;
 #define EULER_INITIALIZE  { { 0, 0, 0 } }
 
+#define IMU_MAG_DECLINATION_MAX 300
+#define IMU_SMALL_ANGLE_MAX 180
+
 extern attitudeEulerAngles_t attitude;
 extern matrix33_t rMat;
 extern quaternion_t imuAttitudeQuaternion; //attitude quaternion to use in blackbox
@@ -82,10 +85,10 @@ void imuUpdateAttitude(timeUs_t currentTimeUs);
 
 void imuInit(void);
 
-#ifdef SIMULATOR_BUILD
+#if ENABLE_SIMULATOR
 void imuSetAttitudeRPY(float roll, float pitch, float yaw);  // in deg
 void imuSetAttitudeQuat(float w, float x, float y, float z);
-#if defined(SIMULATOR_IMU_SYNC)
+#if ENABLE_SIMULATOR_IMU_SYNC
 void imuSetHasNewData(uint32_t dt);
 #endif
 #endif
@@ -93,3 +96,4 @@ void imuSetHasNewData(uint32_t dt);
 bool imuQuaternionHeadfreeOffsetSet(void);
 void imuQuaternionHeadfreeTransformVectorEarthToBody(vector3_t *v);
 bool isUpright(void);
+bool imuIsHeadingValid(void);

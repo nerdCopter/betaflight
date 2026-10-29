@@ -29,7 +29,6 @@
 #include "build/debug.h"
 
 #include "drivers/io.h"
-#include "drivers/io_impl.h"
 #include "drivers/light_led.h"
 #include "drivers/system.h"
 #include "drivers/time.h"
@@ -232,12 +231,12 @@ void spektrumBind(rxConfig_t *rxConfig)
     if (rxConfig->spektrum_bind_pin_override_ioTag) {
         bindPin = rxConfig->spektrum_bind_pin_override_ioTag;
     } else {
-        const serialPortConfig_t *portConfig = findSerialPortConfig(FUNCTION_RX_SERIAL);
-        if (!portConfig) {
+        const serialPortIdentifier_e port = rxConfig->rx_uart;
+        if (port == SERIAL_PORT_NONE) {
             return;
         }
 #if defined(USE_UART) || defined(USE_LPUART) || defined(USE_SOFTSERIAL)
-        const int resourceIndex = serialResourceIndex(portConfig->identifier);
+        const int resourceIndex = serialResourceIndex(port);
         const ioTag_t txPin = serialPinConfig()->ioTagTx[resourceIndex];
         const ioTag_t rxPin = serialPinConfig()->ioTagRx[resourceIndex];
 
@@ -245,7 +244,7 @@ void spektrumBind(rxConfig_t *rxConfig)
         switch (rxRuntimeState.serialrxProvider) {
         case SERIALRX_SRXL:
 #if defined(USE_TELEMETRY_SRXL)
-            if (featureIsEnabled(FEATURE_TELEMETRY) && !telemetryCheckRxPortShared(portConfig, rxRuntimeState.serialrxProvider)) {
+            if (featureIsEnabled(FEATURE_TELEMETRY) && !telemetryCheckRxPortShared(port, rxRuntimeState.serialrxProvider)) {
                 bindPin = txPin;
             }
             break;
@@ -344,14 +343,14 @@ bool spektrumInit(const rxConfig_t *rxConfig, rxRuntimeState_t *rxRuntimeState)
 {
     rxRuntimeStatePtr = rxRuntimeState;
 
-    const serialPortConfig_t *portConfig = findSerialPortConfig(FUNCTION_RX_SERIAL);
-    if (!portConfig) {
+    const serialPortIdentifier_e port = rxConfig->rx_uart;
+    if (port == SERIAL_PORT_NONE) {
         return false;
     }
 
     srxlEnabled = false;
 #if defined(USE_TELEMETRY_SRXL)
-    bool portShared = telemetryCheckRxPortShared(portConfig, rxRuntimeState->serialrxProvider);
+    bool portShared = telemetryCheckRxPortShared(port, rxRuntimeState->serialrxProvider);
 #else
     bool portShared = false;
 #endif
@@ -389,7 +388,7 @@ bool spektrumInit(const rxConfig_t *rxConfig, rxRuntimeState_t *rxRuntimeState)
     rxRuntimeState->rcProcessFrameFn = spektrumProcessFrame;
 #endif
 
-    serialPort = openSerialPort(portConfig->identifier,
+    serialPort = openSerialPort(port,
         FUNCTION_RX_SERIAL,
         spektrumDataReceive,
         rxRuntimeState,

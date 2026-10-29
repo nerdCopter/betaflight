@@ -36,11 +36,7 @@
 #pragma once
 
 #ifndef TARGET_BOARD_IDENTIFIER
-#define TARGET_BOARD_IDENTIFIER "S750"
-#endif
-
-#ifndef USBD_PRODUCT_STRING
-#define USBD_PRODUCT_STRING     "Betaflight STM32H750"
+#define TARGET_BOARD_IDENTIFIER "H750"
 #endif
 
 #if !defined(USE_I2C)
@@ -65,6 +61,8 @@
 #endif
 
 #define USE_SPI_DMA_ENABLE_LATE
+
+#define QUADSPIDEV_COUNT 1
 
 #define USE_VCP
 
@@ -99,7 +97,6 @@
 #endif
 
 #define USE_EXTI
-#define USE_TIMER_UP_CONFIG
 
 #if !(defined(CONFIG_IN_EXTERNAL_FLASH) || defined(CONFIG_IN_MEMORY_MAPPED_FLASH) || defined(CONFIG_IN_RAM) || defined(CONFIG_IN_SDCARD))
 #error "The configured MCU only has one flash page which contains the bootloader, no spare flash pages available, use external storage for persistent config or ram for target testing"

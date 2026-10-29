@@ -42,11 +42,11 @@
 #ifdef USE_ACCGYRO_BMI160
 
 #include "drivers/accgyro/accgyro.h"
+#include "drivers/accgyro/accgyro_mpu.h"
 #include "drivers/accgyro/accgyro_spi_bmi160.h"
 #include "drivers/bus_spi.h"
 #include "drivers/exti.h"
 #include "drivers/io.h"
-#include "drivers/io_impl.h"
 #include "drivers/nvic.h"
 #include "drivers/sensor.h"
 #include "drivers/system.h"
@@ -268,7 +268,7 @@ extiCallbackRec_t bmi160IntCallbackRec;
 // Called in ISR context
 // Gyro read has just completed
 #ifdef USE_DMA
-static busStatus_e bmi160Intcallback(uint32_t arg)
+static busStatus_e bmi160Intcallback(uintptr_t arg)
 {
     gyroDev_t *gyro = (gyroDev_t *)arg;
     int32_t gyroDmaDuration = cmpTimeCycles(getCycleCounter(), gyro->gyroLastEXTI);
@@ -286,7 +286,6 @@ static busStatus_e bmi160Intcallback(uint32_t arg)
 static void bmi160ExtiHandler(extiCallbackRec_t *cb)
 {
     gyroDev_t *gyro = container_of(cb, gyroDev_t, exti);
-    extDevice_t *dev = &gyro->dev;
 
     // Ideally we'd use a timer to capture such information, but unfortunately the port used for EXTI interrupt does
     // not have an associated timer
@@ -295,7 +294,7 @@ static void bmi160ExtiHandler(extiCallbackRec_t *cb)
     gyro->gyroLastEXTI = nowCycles;
 
     if (gyro->gyroModeSPI == GYRO_EXTI_INT_DMA) {
-        spiSequence(dev, gyro->segments);
+        mpuGyroStartDmaRead(gyro);
     }
 
     gyro->detectedEXTI++;
@@ -384,7 +383,7 @@ static bool bmi160GyroRead(gyroDev_t *gyro)
         if (gyro->detectedEXTI > GYRO_EXTI_DETECT_THRESHOLD) {
 #ifdef USE_DMA
             if (spiUseDMA(dev)) {
-                dev->callbackArg = (uint32_t)gyro;
+                dev->callbackArg = (uintptr_t)gyro;
                 dev->txBuf[1] = BMI160_REG_GYR_DATA_X_LSB | 0x80;
                 gyro->segments[0].len = 13;
                 gyro->segments[0].callback = bmi160Intcallback;

@@ -28,7 +28,7 @@
 
 #include "platform.h"
 
-#if defined(USE_I2C) && !defined(SOFT_I2C)
+#if defined(USE_I2C) && !defined(USE_SOFT_I2C)
 
 #include "common/utils.h"
 
@@ -71,9 +71,45 @@ PG_REGISTER_ARRAY_WITH_RESET_FN(i2cConfig_t, I2CDEV_COUNT, i2cConfig, PG_I2C_CON
 #ifndef I2C4_SDA_PIN
 #define I2C4_SDA_PIN NONE
 #endif
+#ifndef I2C5_SCL_PIN
+#define I2C5_SCL_PIN NONE
+#endif
+#ifndef I2C5_SDA_PIN
+#define I2C5_SDA_PIN NONE
+#endif
+#ifndef I2C6_SCL_PIN
+#define I2C6_SCL_PIN NONE
+#endif
+#ifndef I2C6_SDA_PIN
+#define I2C6_SDA_PIN NONE
+#endif
+#ifndef I2C7_SCL_PIN
+#define I2C7_SCL_PIN NONE
+#endif
+#ifndef I2C7_SDA_PIN
+#define I2C7_SDA_PIN NONE
+#endif
+#ifndef I2C8_SCL_PIN
+#define I2C8_SCL_PIN NONE
+#endif
+#ifndef I2C8_SDA_PIN
+#define I2C8_SDA_PIN NONE
+#endif
+#ifndef I2C9_SCL_PIN
+#define I2C9_SCL_PIN NONE
+#endif
+#ifndef I2C9_SDA_PIN
+#define I2C9_SDA_PIN NONE
+#endif
+#ifndef I2C10_SCL_PIN
+#define I2C10_SCL_PIN NONE
+#endif
+#ifndef I2C10_SDA_PIN
+#define I2C10_SDA_PIN NONE
+#endif
 
 typedef struct i2cDefaultConfig_s {
-    I2CDevice device;
+    i2cDevice_e device;
     ioTag_t ioTagScl, ioTagSda;
     bool pullUp;
     uint16_t clockSpeed;
@@ -95,15 +131,33 @@ static const i2cDefaultConfig_t i2cDefaultConfig[] = {
 #ifdef USE_I2C_DEVICE_4
     { I2CDEV_4, IO_TAG(I2C4_SCL_PIN), IO_TAG(I2C4_SDA_PIN), I2C4_PULLUP, I2C4_CLOCKSPEED },
 #endif
+#ifdef USE_I2C_DEVICE_5
+    { I2CDEV_5, IO_TAG(I2C5_SCL_PIN), IO_TAG(I2C5_SDA_PIN), I2C5_PULLUP, I2C5_CLOCKSPEED },
+#endif
+#ifdef USE_I2C_DEVICE_6
+    { I2CDEV_6, IO_TAG(I2C6_SCL_PIN), IO_TAG(I2C6_SDA_PIN), I2C6_PULLUP, I2C6_CLOCKSPEED },
+#endif
+#ifdef USE_I2C_DEVICE_7
+    { I2CDEV_7, IO_TAG(I2C7_SCL_PIN), IO_TAG(I2C7_SDA_PIN), I2C7_PULLUP, I2C7_CLOCKSPEED },
+#endif
+#ifdef USE_I2C_DEVICE_8
+    { I2CDEV_8, IO_TAG(I2C8_SCL_PIN), IO_TAG(I2C8_SDA_PIN), I2C8_PULLUP, I2C8_CLOCKSPEED },
+#endif
+#ifdef USE_I2C_DEVICE_9
+    { I2CDEV_9, IO_TAG(I2C9_SCL_PIN), IO_TAG(I2C9_SDA_PIN), I2C9_PULLUP, I2C9_CLOCKSPEED },
+#endif
+#ifdef USE_I2C_DEVICE_10
+    { I2CDEV_10, IO_TAG(I2C10_SCL_PIN), IO_TAG(I2C10_SDA_PIN), I2C10_PULLUP, I2C10_CLOCKSPEED },
+#endif
 };
 
 void pgResetFn_i2cConfig(i2cConfig_t *i2cConfig)
 {
-    memset(i2cConfig, 0, sizeof(*i2cConfig));
+    memset(i2cConfig, 0, sizeof(*i2cConfig) * I2CDEV_COUNT);
 
     for (size_t index = 0 ; index < ARRAYLEN(i2cDefaultConfig) ; index++) {
         const i2cDefaultConfig_t *defconf = &i2cDefaultConfig[index];
-        int device = defconf->device;
+        const i2cDevice_e device = defconf->device;
         i2cConfig[device].ioTagScl = defconf->ioTagScl;
         i2cConfig[device].ioTagSda = defconf->ioTagSda;
         i2cConfig[device].pullUp = defconf->pullUp;

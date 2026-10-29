@@ -21,10 +21,14 @@
 
 #include <stdint.h>
 #include <string.h>
+#include <stdlib.h>
 
 #include "platform.h"
 
+#include "common/maths.h"
+#include "common/time.h"
 #include "drivers/system.h"
+#include "drivers/time.h"
 
 #include "drivers/io.h"
 #include "drivers/light_led.h"
@@ -33,9 +37,24 @@
 #include "platform/multicore.h"
 
 #include "hardware/clocks.h"
+#include "hardware/ticks.h"
 #include "hardware/timer.h"
 #include "hardware/watchdog.h"
+#include "pico/bootrom.h"
 #include "pico/unique_id.h"
+
+#ifndef PICO_TRACE
+// If not using trace, help avoid pulling in printf by overriding the standard (weak) __assert_func definition
+void __assert_func(const char *file, int line, const char *func, const char *failedexpr)
+{
+    UNUSED(file);
+    UNUSED(line);
+    UNUSED(func);
+    UNUSED(failedexpr);
+    exit(1);
+}
+#endif
+
 
 ///////////////////////////////////////////////////
 
@@ -60,7 +79,12 @@ void systemReset(void)
 {
     bprintf("*** PICO systemReset ***");
     //TODO: check
+
 #if 1
+#ifdef USE_MULTICORE
+    // Reset core 1
+    multicore_reset_core1();
+#endif
     watchdog_reboot(0, 0, 0);
 #else
     // this might be fine
@@ -74,6 +98,8 @@ uint32_t systemUniqueId[3] = { 0 };
 // cycles per microsecond
 static uint32_t usTicks = 0;
 static float usTicksInv = 0.0f;
+
+static int32_t millisOffset;
 
 // These are defined in pico-sdk headers as volatile uint32_t types
 #define PICO_DWT_CTRL   m33_hw->dwt_ctrl
@@ -92,12 +118,27 @@ void cycleCounterInit(void)
     // Reset and enable cycle counter
     PICO_DWT_CYCCNT = 0;
     PICO_DWT_CTRL |= M33_DWT_CTRL_CYCCNTENA_BITS;
+
+    // Start a timer, for millis().
+    // The default timer is TIMER0, which is used for time_us_32/64 (for micros).
+    // We can use TIMER1 (spare).
+    // Assuming clk_ref (from XOSC) is at 12Mhz (standard for RP2350, and we're already
+    // assuming this for micros()).
+    tick_stop(TICK_TIMER1);
+
+    // We are allowed to divide the 12Mhz timer down by a number in 1..511.
+    // 12000 = 375 * 32, so we divide by 375 to get a 32kHz timer, then by 32 when reading the counter.
+    tick_start(TICK_TIMER1, 375);
+
+    // Calibrate
+    uint32_t u1 = time_us_32();
+    uint32_t m1 = millis();
+    uint32_t u2 = time_us_32();
+    millisOffset = (u1 + u2) / 2000 - m1; // (m1 + offset) == (u1+u2)/2000 = avg us converted to ms
 }
 
 void systemInit(void)
 {
-    //TODO: implement
-
     SystemInit();
 
     cycleCounterInit();
@@ -105,7 +146,8 @@ void systemInit(void)
     // load the unique id into a local array
     pico_unique_board_id_t id;
     pico_get_unique_board_id(&id);
-    memcpy(&systemUniqueId, &id.id, MIN(sizeof(systemUniqueId), PICO_UNIQUE_BOARD_ID_SIZE_BYTES));
+    memcpy(&systemUniqueId, &id.id, MIN(sizeof(systemUniqueId), (uint32_t)PICO_UNIQUE_BOARD_ID_SIZE_BYTES));
+
 
 #ifdef USE_MULTICORE
     multicoreStart();
@@ -114,23 +156,47 @@ void systemInit(void)
 
 void systemResetToBootloader(bootloaderRequestType_e requestType)
 {
-    UNUSED(requestType);
-    //TODO: implement
+    switch (requestType) {
+    case BOOTLOADER_REQUEST_ROM:
+        rom_reset_usb_boot_extra(-1, 0, false);
+        break;
+    case BOOTLOADER_REQUEST_FLASH:
+    default:
+        systemReset();
+    }
 }
 
+// We can make use of time_us_64 if BF defines USE_64BIT_TIME in future, but that will require some changes
+STATIC_ASSERT(sizeof(timeMs_t) == sizeof(uint32_t), timeMs_t_is_32_bit_failed);
+STATIC_ASSERT(sizeof(timeUs_t) == sizeof(uint32_t), timeUs_t_is_32_bit_failed);
+
 // Return system uptime in milliseconds (rollover in 49 days)
-uint32_t millis(void)
+timeMs_t millis(void)
 {
-    return (uint32_t)(time_us_64() / 1000);
+    // Avoid 64-bit division of time_us_64() / 1000 by using timer1.
+    // Read low and high words carefully, as per timer_time_us_64 in the Pico SDK.
+    uint32_t hi = timer1_hw->timerawh;
+    uint32_t lo;
+    do {
+        lo = timer1_hw->timerawl;
+        // Check that the upper 32 bits haven't incremented, loop if required (will only be once).
+        uint32_t next_hi = timer1_hw->timerawh;
+        if (hi == next_hi) break;
+        hi = next_hi;
+    } while (true);
+
+    // Take the 64-bit value and shift right by 5 (divide by 32).
+    // Add the offset, just in case anyone in the future relies on micros() and millis() being aligned.
+    return ((uint32_t)((uint64_t)hi << 27 | (lo >> 5))) + millisOffset;
 }
 
 // Return system uptime in micros (rollover in 71 mins)
-uint32_t micros(void)
+timeUs_t micros(void)
 {
     return time_us_32();
 }
 
-uint32_t microsISR(void)
+timeUs_t microsISR(void)
 {
     return micros();
 }
@@ -234,16 +300,3 @@ void unusedPinsInit(void)
     IOTraversePins(unusedPinInit);
 }
 
-const mcuTypeInfo_t *getMcuTypeInfo(void)
-{
-    static const mcuTypeInfo_t info = {
-#if defined(RP2350A)
-        .id = MCU_TYPE_RP2350A, .name = "RP2350A"
-#elif defined(RP2350B)
-        .id = MCU_TYPE_RP2350B, .name = "RP2350B"
-#else
-#error MCU Type info not defined for PICO / variant
-#endif
-    };
-    return &info;
-}

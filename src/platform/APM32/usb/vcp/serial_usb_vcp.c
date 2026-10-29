@@ -44,6 +44,8 @@
 #include "drivers/serial.h"
 #include "drivers/serial_usb_vcp.h"
 
+#include "scheduler/scheduler.h"
+
 static void USB_DevUserHandler(USBD_INFO_T* usbInfo, uint8_t userStatus);
 
 extern USBD_CDC_INTERFACE_T USBD_CDC_INTERFACE;
@@ -123,6 +125,11 @@ static void usbVcpWriteBuf(serialPort_t *instance, const void *data, int count)
         count -= txed;
         p += txed;
 
+        if (count > 0) {
+            // USB backpressure wait is not task execution time.
+            schedulerIgnoreTaskExecTime();
+        }
+
         if (millis() - start > USB_TIMEOUT) {
             break;
         }
@@ -148,6 +155,11 @@ static bool usbVcpFlush(vcpPort_t *port)
         uint32_t txed = CDC_Send_DATA(p, count);
         count -= txed;
         p += txed;
+
+        if (count > 0) {
+            // USB backpressure wait is not task execution time.
+            schedulerIgnoreTaskExecTime();
+        }
 
         if (millis() - start > USB_TIMEOUT) {
             break;
@@ -202,7 +214,7 @@ static const struct serialPortVTable usbVTable[] = {
     }
 };
 
-serialPort_t *usbVcpOpen(void)
+void usbVcpInit(void)
 {
     IOInit(IOGetByTag(IO_TAG(PA11)), OWNER_USB, 0);
     IOInit(IOGetByTag(IO_TAG(PA12)), OWNER_USB, 0);
@@ -214,7 +226,10 @@ serialPort_t *usbVcpOpen(void)
 
     /* USB device and class init */
     USBD_Init(&gUsbDevice, USBD_SPEED_FS, &USBD_DESC_VCP, &USBD_CDC_CLASS, USB_DevUserHandler);
+}
 
+serialPort_t *usbVcpOpen(void)
+{
     vcpPort_t *s = &vcpPort;
     s->port.vTable = usbVTable;
     return &s->port;
@@ -230,6 +245,11 @@ uint32_t usbVcpGetBaudRate(serialPort_t *instance)
 uint8_t usbVcpIsConnected(void)
 {
     return usbIsConnected();
+}
+
+uint8_t usbVcpIsActive(void)
+{
+    return usbIsConnected() && usbIsConfigured();
 }
 
 /**

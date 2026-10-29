@@ -88,6 +88,21 @@ typedef enum {
 #ifdef USE_UART10
     UARTDEV_10,
 #endif
+#ifdef USE_UART11
+    UARTDEV_11,
+#endif
+#ifdef USE_UART12
+    UARTDEV_12,
+#endif
+#ifdef USE_UART13
+    UARTDEV_13,
+#endif
+#ifdef USE_UART14
+    UARTDEV_14,
+#endif
+#ifdef USE_UART15
+    UARTDEV_15,
+#endif
 #ifdef USE_LPUART1
     UARTDEV_LP1,
 #endif
@@ -103,7 +118,7 @@ typedef struct uartPinDef_s {
 
 typedef struct uartHardware_s {
     serialPortIdentifier_e identifier;
-    USART_TypeDef* reg;
+    usartResource_t *reg;
 
 #ifdef USE_DMA
     dmaResource_t *txDMAResource;
@@ -160,15 +175,16 @@ typedef struct uartDevice_s {
     const uartHardware_t *hardware;
     uartPinDef_t rx;
     uartPinDef_t tx;
-    volatile uint8_t *rxBuffer;
-    volatile uint8_t *txBuffer;
 #if UART_TRAIT_PINSWAP
     bool pinSwap;
 #endif
-    txPinState_t txPinState;
+    volatile txPinState_t txPinState;
 } uartDevice_t;
 
 extern uartDevice_t uartDevice[UARTDEV_COUNT];  // indexed by uartDeviceIdx_e;
+#if SERIAL_PIOUART_COUNT > 0
+extern uartDevice_t pioUartDevice[SERIAL_PIOUART_COUNT]; // used continuously in order, 0..SERIAL_PIOUART_COUNT-1
+#endif
 
 uartDeviceIdx_e uartDeviceIdxFromIdentifier(serialPortIdentifier_e identifier);
 uartDevice_t* uartDeviceFromIdentifier(serialPortIdentifier_e identifier);
@@ -244,8 +260,68 @@ UART_BUFFERS_EXTERN(9);
 UART_BUFFERS_EXTERN(10);
 #endif
 
+#ifdef USE_UART11
+UART_BUFFERS_EXTERN(11);
+#endif
+
+#ifdef USE_UART12
+UART_BUFFERS_EXTERN(12);
+#endif
+
+#ifdef USE_UART13
+UART_BUFFERS_EXTERN(13);
+#endif
+
+#ifdef USE_UART14
+UART_BUFFERS_EXTERN(14);
+#endif
+
+#ifdef USE_UART15
+UART_BUFFERS_EXTERN(15);
+#endif
+
 #ifdef USE_LPUART1
 UART_BUFFERS_EXTERN(Lp1);
+#endif
+
+#ifdef USE_PIOUART0
+UART_BUFFERS_EXTERN(Pio0);
+#endif
+
+#ifdef USE_PIOUART1
+UART_BUFFERS_EXTERN(Pio1);
+#endif
+
+#ifdef USE_PIOUART2
+UART_BUFFERS_EXTERN(Pio2);
+#endif
+
+#ifdef USE_PIOUART3
+UART_BUFFERS_EXTERN(Pio3);
+#endif
+
+#ifdef USE_PIOUART4
+UART_BUFFERS_EXTERN(Pio4);
+#endif
+
+#ifdef USE_PIOUART5
+UART_BUFFERS_EXTERN(Pio5);
+#endif
+
+#ifdef USE_PIOUART6
+UART_BUFFERS_EXTERN(Pio6);
+#endif
+
+#ifdef USE_PIOUART7
+UART_BUFFERS_EXTERN(Pio7);
+#endif
+
+#ifdef USE_PIOUART8
+UART_BUFFERS_EXTERN(Pio8);
+#endif
+
+#ifdef USE_PIOUART9
+UART_BUFFERS_EXTERN(Pio9);
 #endif
 
 #undef UART_BUFFERS_EXTERN

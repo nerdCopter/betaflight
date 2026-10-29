@@ -7,6 +7,10 @@
 # PICO_TRACE = 1
 DEFAULT_OUTPUT := uf2
 
+# Auto-hydrate pico-sdk submodule when building PICO targets
+PLATFORM_SDK := pico_sdk
+PLATFORM_SDK_STAMP := $(PICO_SDK_STAMP)
+
 # Run from SRAM. To disable, set environment variable RUN_FROM_RAM=0
 ifeq ($(RUN_FROM_RAM),)
 RUN_FROM_RAM = 1
@@ -19,6 +23,24 @@ PICO_MK_DIR = $(TARGET_PLATFORM_DIR)/mk
 
 ifneq ($(PICO_TRACE),)
 include $(PICO_MK_DIR)/PICO_trace.mk
+else
+# If not using trace, then we can avoid pulling in printf, which is referenced by the panic
+# and __assert_func functions (there's no point in those calling printf if we are not tracing).
+# When PICO_PANIC_FUNCTION is defined and empty, pico-sdk provides the simplest panic function.
+# The __assert_func function will be defined in system.c when PICO_TRACE macro is not defined.
+DEVICE_FLAGS += -DPICO_PANIC_FUNCTION=
+endif
+
+ifneq ($(TEST_PIO_DEBUG),)
+# DSHOT bidir debugging
+# Hellbender: 8, 9 appear on J7 (GNSS/GPS connector, currently unused)
+# 18, 19 currently not connected, harmless to use
+DEVICE_FLAGS += \
+    -DDSHOT_DEBUG_PIO \
+    -DDSHOT_DEBUG_SIDE0=8 \
+    -DDSHOT_DEBUG_SIDE1=9 \
+    -DDSHOT_DEBUG_SIDE2=18 \
+    -DDSHOT_DEBUG_SIDE3=19
 endif
 
 RP2350_TARGETS = RP2350A RP2350B
@@ -30,7 +52,7 @@ ifeq ($(DEBUG_HARDFAULTS),PICO)
 CFLAGS          += -DDEBUG_HARDFAULTS
 endif
 
-SDK_DIR         = $(LIB_MAIN_DIR)/pico-sdk/src
+SDK_DIR         = $(LIB_MODULES_DIR)/pico-sdk/src
 
 #CMSIS
 CMSIS_DIR      := $(SDK_DIR)/rp2_common/cmsis/stub/CMSIS
@@ -64,7 +86,6 @@ PICO_LIB_SRC = \
             common/hardware_claim/claim.c \
             common/pico_sync/critical_section.c \
             rp2_common/hardware_sync/sync.c \
-            rp2_common/pico_bootrom/bootrom.c \
             rp2_common/pico_runtime_init/runtime_init.c \
             rp2_common/pico_runtime_init/runtime_init_clocks.c \
             rp2_common/pico_runtime_init/runtime_init_stack_guard.c \
@@ -81,18 +102,17 @@ PICO_LIB_SRC = \
             rp2_common/pico_bootrom/bootrom.c \
             rp2_common/pico_bootrom/bootrom_lock.c \
             rp2_common/pico_divider/divider_compiler.c \
-            rp2_common/pico_double/double_math.c \
             rp2_common/pico_flash/flash.c \
-            rp2_common/pico_float/float_math.c \
             rp2_common/hardware_divider/divider.c \
             rp2_common/hardware_vreg/vreg.c \
             rp2_common/hardware_xip_cache/xip_cache.c \
             rp2_common/pico_standard_binary_info/standard_binary_info.c \
             rp2_common/pico_clib_interface/newlib_interface.c \
             rp2_common/pico_malloc/malloc.c \
-            rp2_common/pico_stdlib/stdlib.c
+            rp2_common/pico_stdlib/stdlib.c \
+            rp2_common/pico_bit_ops/bit_ops_aeabi.S
 
-TINY_USB_SRC_DIR = $(LIB_MAIN_DIR)/pico-sdk/lib/tinyusb/src
+TINY_USB_SRC_DIR = $(LIB_MODULES_DIR)/pico-sdk/lib/tinyusb/src
 TINYUSB_SRC := \
             $(TINY_USB_SRC_DIR)/tusb.c \
             $(TINY_USB_SRC_DIR)/class/cdc/cdc_device.c \
@@ -116,6 +136,130 @@ TINYUSB_SRC += \
             $(TINY_USB_SRC_DIR)/class/usbtmc/usbtmc_device.c \
             $(TINY_USB_SRC_DIR)/class/audio/audio_device.c
 
+# pico_float
+PICO_LIB_SRC  += \
+            rp2_common/pico_float/float_common_m33.S \
+            rp2_common/pico_float/float_conv32_vfp.S \
+            rp2_common/pico_float/float_math.c \
+            rp2_common/pico_float/float_sci_m33_vfp.S
+
+PICO_FLOAT_WRAP_FNS = \
+            __aeabi_f2lz \
+            __aeabi_f2ulz \
+            __aeabi_l2f \
+            __aeabi_ul2f \
+            acosf \
+            acoshf \
+            asinf \
+            asinhf \
+            atan2f \
+            atanf \
+            atanhf \
+            cbrtf \
+            ceilf \
+            copysignf \
+            cosf \
+            coshf \
+            dremf \
+            exp10f \
+            exp2f \
+            expf \
+            expm1f \
+            floorf \
+            fmaf \
+            fmodf \
+            hypotf \
+            ldexpf \
+            log10f \
+            log1pf \
+            log2f \
+            logf \
+            powf \
+            powintf \
+            remainderf \
+            remquof \
+            roundf \
+            sincosf \
+            sinf \
+            sinhf \
+            tanf \
+            tanhf \
+            truncf
+
+PICO_FLOAT_LD_FLAGS = $(foreach fn, $(PICO_FLOAT_WRAP_FNS), -Wl,--wrap=$(fn))
+
+# pico_double
+PICO_LIB_SRC += \
+            rp2_common/pico_double/double_aeabi_dcp.S \
+            rp2_common/pico_double/double_conv_m33.S \
+            rp2_common/pico_double/double_fma_dcp.S \
+            rp2_common/pico_double/double_math.c \
+            rp2_common/pico_double/double_sci_m33.S
+
+PICO_DOUBLE_WRAP_FNS = \
+            __aeabi_cdcmpeq \
+            __aeabi_cdcmple \
+            __aeabi_cdrcmple \
+            __aeabi_d2f \
+            __aeabi_d2iz \
+            __aeabi_d2lz \
+            __aeabi_d2uiz \
+            __aeabi_d2ulz \
+            __aeabi_dadd \
+            __aeabi_dcmpeq \
+            __aeabi_dcmpge \
+            __aeabi_dcmpgt \
+            __aeabi_dcmple \
+            __aeabi_dcmplt \
+            __aeabi_dcmpun \
+            __aeabi_ddiv \
+            __aeabi_dmul \
+            __aeabi_drsub \
+            __aeabi_dsub \
+            __aeabi_i2d \
+            __aeabi_l2d \
+            __aeabi_ui2d \
+            __aeabi_ul2d \
+            acos \
+            acosh \
+            asin \
+            asinh \
+            atan \
+            atan2 \
+            atanh \
+            cbrt \
+            ceil \
+            copysign \
+            cos \
+            cosh \
+            drem \
+            exp \
+            exp10 \
+            exp2 \
+            expm1 \
+            floor \
+            fma \
+            fmod \
+            hypot \
+            ldexp \
+            log \
+            log10 \
+            log1p \
+            log2 \
+            pow \
+            powint \
+            remainder \
+            remquo \
+            round \
+            sin \
+            sincos \
+            sinh \
+            sqrt \
+            tan \
+            tanh \
+            trunc
+
+PICO_DOUBLE_LD_FLAGS = $(foreach fn, $(PICO_DOUBLE_WRAP_FNS), -Wl,--wrap=$(fn))
 
 VPATH := $(VPATH):$(STDPERIPH_DIR)
 
@@ -232,7 +376,7 @@ SYS_INCLUDE_DIRS = \
             $(SDK_DIR)/$(TARGET_MCU_LIB_LOWER)/pico_platform/include \
             $(SDK_DIR)/$(TARGET_MCU_LIB_LOWER)/hardware_regs/include \
             $(SDK_DIR)/$(TARGET_MCU_LIB_LOWER)/hardware_structs/include \
-            $(LIB_MAIN_DIR)/pico-sdk/lib/tinyusb/src
+            $(LIB_MODULES_DIR)/pico-sdk/lib/tinyusb/src
 
 SYS_INCLUDE_DIRS += \
             $(SDK_DIR)/rp2350/boot_stage2/include
@@ -241,10 +385,15 @@ SYS_INCLUDE_DIRS += \
 ARCH_FLAGS      = -mthumb -mcpu=cortex-m33 -march=armv8-m.main+fp+dsp -mcmse -mfloat-abi=softfp
 ARCH_FLAGS      += -DPICO_COPY_TO_RAM=$(RUN_FROM_RAM)
 
-# Automatically treating constants as single-precision breaks pico-sdk (-Werror=double-promotion)
-# We should go through BF code and explicitly declare constants as single rather than double as required,
-# rather than relying on this flag.
-# ARCH_FLAGS      += -fsingle-precision-constant
+# Work around memcpy alignment issue: compiler to generate function calls
+# rather than inlining code that is sometimes broken.
+# (Calls to memcpy, memset become calls to performant wrapped versions.)
+ARCH_FLAGS      += -fno-builtin-memcpy -fno-builtin-memset
+
+# GCC canonicalises every header found via -isystem with a readlink per path
+# component; with the ~100 pico-sdk system include dirs that is ~23M syscalls a
+# build, which dominates the compile under a sandboxed runtime (gVisor).
+ARCH_FLAGS      += -fno-canonical-system-headers
 
 PICO_STDIO_USB_FLAGS = \
             -DLIB_PICO_PRINTF=1 \
@@ -253,23 +402,48 @@ PICO_STDIO_USB_FLAGS = \
             -DLIB_PICO_STDIO_USB=1 \
             -DCFG_TUSB_DEBUG=0  \
             -DCFG_TUSB_MCU=OPT_MCU_RP2040  \
-            -DCFG_TUSB_OS=OPT_OS_PICO  \
+            -DCFG_TUSB_OS=OPT_OS_NONE  \
             -DLIB_PICO_FIX_RP2040_USB_DEVICE_ENUMERATION=1 \
             -DPICO_RP2040_USB_DEVICE_UFRAME_FIX=1  \
             -DPICO_STDIO_USB_CONNECT_WAIT_TIMEOUT_MS=3000 \
             -DLIB_PICO_UNIQUEID=1
 
-PICO_STDIO_LD_FLAGS  = \
-            -Wl,--wrap=sprintf \
-            -Wl,--wrap=snprintf \
-            -Wl,--wrap=vsnprintf \
-            -Wl,--wrap=printf \
-            -Wl,--wrap=vprintf \
-            -Wl,--wrap=puts \
-            -Wl,--wrap=putchar \
-            -Wl,--wrap=getchar
+PICO_STDIO_WRAP_FNS  = \
+            sprintf \
+            snprintf \
+            vsnprintf \
+            printf \
+            vprintf \
+            puts \
+            putchar \
+            getchar
 
-EXTRA_LD_FLAGS += $(PICO_STDIO_LD_FLAGS) $(PICO_TRACE_LD_FLAGS)
+PICO_STDIO_LD_FLAGS = $(foreach fn, $(PICO_STDIO_WRAP_FNS), -Wl,--wrap=$(fn))
+
+PICO_BIT_OPS_LD_FLAGS = \
+            -Wl,--wrap=__ctzdi2
+
+PICO_LIB_SRC += \
+            PICO/memfunctions.S
+
+PICO_MEM_WRAP_FNS = \
+            memcpy_44 \
+            memcpy \
+            memset_4 \
+            memset
+
+PICO_MEM_LD_FLAGS = $(foreach fn, $(PICO_MEM_WRAP_FNS), -Wl,--wrap=$(fn))
+
+PICO_LIB_SRC += \
+            PICO/math_pico.S
+
+# Wrapped version of lrintf (nearest integer to float) for vcvtn instruction instead of slow library function
+PICO_MATH_WRAP_FNS = \
+            lrintf
+
+PICO_MATH_WRAP_FLAGS = $(foreach fn, $(PICO_MATH_WRAP_FNS), -Wl,--wrap=$(fn))
+
+EXTRA_LD_FLAGS += $(PICO_STDIO_LD_FLAGS) $(PICO_TRACE_LD_FLAGS) $(PICO_FLOAT_LD_FLAGS) $(PICO_DOUBLE_LD_FLAGS) $(PICO_BIT_OPS_LD_FLAGS) $(PICO_MEM_LD_FLAGS) $(PICO_MATH_WRAP_FLAGS)
 
 ifdef RP2350_TARGET
 
@@ -325,15 +499,32 @@ DEVICE_FLAGS    += \
             -DPICO_NO_HARDWARE=0 \
             -DPICO_ON_DEVICE=1 \
             -DPICO_RP2350=1 \
-            -DPICO_USE_BLOCKED_RAM=0
+            -DPICO_USE_BLOCKED_RAM=0 \
+            -DPICO_CORE1_STACK_SIZE=0x1000
 
-ifeq ($(RUN_FROM_RAM),1)
-LD_SCRIPT       = $(LINKER_DIR)/pico_rp2350_RunFromRAM.ld
+
+# LD_SCRIPT must be set to the first included linker script.
+# Set the sizes of flash and contents in LD_SCRIPT, other linker files loaded via EXTRA_LD_FLAGS.
+
+# Optional board-specific linker script for setting the size of the primary flash, and the allocation for fonts.
+CONFIG_FLASH_MEM_SCRIPT = $(CONFIG_PATH)/pico_flash_mem.ld
+
+# If pico_flash_mem.ld exists in the config folder, use that, otherwise load defaults from pico_flash_mem_defaults.ld
+ifneq ($(wildcard $(CONFIG_FLASH_MEM_SCRIPT)),)
+LD_SCRIPT += $(CONFIG_FLASH_MEM_SCRIPT)
 else
-LD_SCRIPT       = $(LINKER_DIR)/pico_rp2350_RunFromFLASH.ld
+LD_SCRIPT += $(LINKER_DIR)/pico_flash_mem_defaults.ld
 endif
 
-STARTUP_SRC     = PICO/startup/bs2_default_padded_checksummed.S
+ifeq ($(RUN_FROM_RAM),1)
+# RunFromRAM -> loads everything into RAM, fastest, uses most RAM
+# EXTRA_LD_FLAGS  += -T$(LINKER_DIR)/pico_rp2350_RunFromRAM.ld
+
+# RunFromHybrid -> load most code / data into RAM, with some exclusions (cli, pg, ...)
+EXTRA_LD_FLAGS  += -T$(LINKER_DIR)/pico_rp2350_RunFromHybrid.ld
+else
+EXTRA_LD_FLAGS  += -T$(LINKER_DIR)/pico_rp2350_RunFromFLASH.ld
+endif
 
 # Override the OPTIMISE_SPEED compiler setting to save flash space on these 512KB targets.
 # Performance is only slightly affected but around 50 kB of flash are saved.
@@ -355,9 +546,7 @@ endif
 
 PICO_STDIO_USB_SRC = \
             rp2_common/pico_stdio_usb/reset_interface.c \
-            rp2_common/pico_fix/rp2040_usb_device_enumeration/rp2040_usb_device_enumeration.c \
-            rp2_common/pico_bit_ops/bit_ops_aeabi.S \
-            rp2_common/pico_stdio_usb/stdio_usb_descriptors.c
+            rp2_common/pico_fix/rp2040_usb_device_enumeration/rp2040_usb_device_enumeration.c
 
 # TODO check
 #    rp2_common/pico_stdio_usb/stdio_usb_descriptors.c \
@@ -393,23 +582,52 @@ MCU_COMMON_SRC = \
             drivers/serial_pinconfig.c \
             drivers/usb_io.c \
             drivers/dshot.c \
+            drivers/adc.c \
+            PICO/adc_pico.c \
             PICO/bus_i2c_pico.c \
             PICO/bus_spi_pico.c \
+            PICO/bus_quadspi_pico.c \
             PICO/config_flash.c \
             PICO/debug_pico.c \
             PICO/dma_pico.c \
+            PICO/dshot_bidir_pico.c \
             PICO/dshot_pico.c \
             PICO/exti_pico.c \
             PICO/io_pico.c \
+            PICO/osd/font_betaflight.c \
+            PICO/osd/fb_osd_pico.c \
+            PICO/osd/osd_element_ah.c \
+            PICO/osd/osd_element_altitude.c \
+            PICO/osd/osd_element_compassbar.c \
+            PICO/osd/osd_element_crosshairs.c \
+            PICO/osd/osd_elements_pico.c \
+            PICO/osd/osd_pico.c \
             PICO/persistent.c \
-            PICO/pwm_pico.c \
+            PICO/pwm_motor_pico.c \
+            PICO/pwm_servo_pico.c \
             PICO/pwm_beeper_pico.c \
-            PICO/serial_uart_pico.c \
+            PICO/gyro_clkin_pico.c \
             PICO/serial_usb_vcp_pico.c \
             PICO/system.c \
+            PICO/uart/serial_uart_pico.c \
+            PICO/uart/uart_hw.c \
+            PICO/uart/uart_pio.c \
+            PICO/uart/uart_rx_program.c \
+            PICO/uart/uart_tx_program.c \
             PICO/usb/usb_cdc.c \
+            PICO/usb/usb_descriptors.c \
+            PICO/usb/usb_msc_pico.c \
             PICO/multicore.c \
-            PICO/debug_pin.c
+            PICO/debug_pin.c \
+            PICO/light_ws2811strip_pico.c
+
+# USB MSC support sources (TinyUSB backend on PICO)
+MSC_SRC = \
+            drivers/usb_msc_common.c \
+            msc/usbd_storage.c \
+            msc/usbd_storage_emfat.c \
+            msc/emfat.c \
+            msc/emfat_file.c
 
 DEVICE_STDPERIPH_SRC := \
             $(PICO_LIB_SRC) \
@@ -426,3 +644,11 @@ PICO_LIB_OBJS = $(addsuffix .o, $(basename $(PICO_LIB_SRC)))
 PICO_LIB_OBJS += $(addsuffix .o, $(basename $(PICO_TRACE_SRC)))
 PICO_LIB_TARGETS := $(foreach pobj, $(PICO_LIB_OBJS), %/$(pobj))
 $(PICO_LIB_TARGETS): CC_DEFAULT_OPTIMISATION := $(PICO_LIB_OPTIMISATION)
+
+# Linker script pico_rp2350_RunFromHybrid.ld modified to assign symbols from
+# certain files into flash instead of RAM (save memory without impacting performance), but
+# that can't work if build uses lto (link time optimisation has the effect of
+# breaking files up into temporary files)
+ifeq ($(RUN_FROM_RAM),1)
+LTO                   := no
+endif

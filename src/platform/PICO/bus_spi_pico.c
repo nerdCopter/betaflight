@@ -37,13 +37,18 @@
 
 #include "common/maths.h"
 #include "drivers/bus.h"
+#include "drivers/bus_spi_types.h"
 #include "drivers/bus_spi.h"
 #include "drivers/bus_spi_impl.h"
 #include "drivers/exti.h"
 #include "drivers/io.h"
 #include "drivers/io_def.h"
 #include "drivers/io_impl.h"
+#include "drivers/dma.h"
+#include "drivers/dma_impl.h"
 #include "drivers/nvic.h"
+
+#include "platform/dma.h"
 
 #include "hardware/spi.h"
 #include "hardware/gpio.h"
@@ -59,7 +64,7 @@
 const spiHardware_t spiHardware[] = {
     {
         .device = SPIDEV_0,
-        .reg = SPI0,
+        .reg = (spiResource_t *)SPI0,
         .sckPins = {
             { DEFIO_TAG_E(PA2) },
             { DEFIO_TAG_E(PA6) },
@@ -93,7 +98,7 @@ const spiHardware_t spiHardware[] = {
     },
     {
         .device = SPIDEV_1,
-        .reg = SPI1,
+        .reg = (spiResource_t *)SPI1,
         .sckPins = {
             { DEFIO_TAG_E(PA10) },
             { DEFIO_TAG_E(PA14) },
@@ -138,7 +143,7 @@ void spiPinConfigure(const struct spiPinConfig_s *pConfig)
             continue;
         }
 
-        SPIDevice device = hw->device;
+        const spiDevice_e device = hw->device;
         spiDevice_t *pDev = &spiDevice[device];
 
         for (int pindex = 0 ; pindex < MAX_SPI_PIN_SEL ; pindex++) {
@@ -165,12 +170,16 @@ void spiPinConfigure(const struct spiPinConfig_s *pConfig)
 static void spiSetClockFromSpeed(spi_inst_t *spi, uint16_t speed)
 {
     uint32_t freq = spiCalculateClock(speed);
-    bprintf("spiSetClockFromSpeed %p %d -> %d",spi, speed, freq);
-    spi_set_baudrate(spi, freq);
+    uint32_t baudrate = spi_set_baudrate(spi, freq);
+#ifdef PICO_TRACE
+    bprintf("spiSetClockFromSpeed %p %d -> %d, achieved %d",spi, speed, freq, baudrate);
+#else
+    UNUSED(baudrate);
+#endif
 }
 
 /*
-  
+
 enum spi_cpha_t { SPI_CPHA_0 = 0, SPI_CPHA_1 = 1 }
 Enumeration of SPI CPHA (clock phase) values.
 
@@ -206,9 +215,7 @@ Must be SPI_MSB_FIRST, no other values supported on the PL022
 
 
 */
-
-
-void spiInitDevice(SPIDevice device)
+void spiInitDevice(spiDevice_e device)
 {
     bprintf("pico spiInitDevice %d",device);
     const spiDevice_t *spi = &spiDevice[device];
@@ -227,6 +234,7 @@ void spiInitDevice(SPIDevice device)
     gpio_set_function(IO_PINBYTAG(spi->miso), GPIO_FUNC_SPI);
     gpio_set_function(IO_PINBYTAG(spi->mosi), GPIO_FUNC_SPI);
     gpio_set_function(IO_PINBYTAG(spi->sck), GPIO_FUNC_SPI);
+    gpio_set_pulls(IO_PINBYTAG(spi->miso), true, false); // Pullup MISO
     bprintf("spi initialised device %p [sck %d mosi %d miso %d]",
             spi->dev, IO_PINBYTAG(spi->sck), IO_PINBYTAG(spi->mosi), IO_PINBYTAG(spi->miso));
 }
@@ -247,6 +255,11 @@ void spiInternalStopDMA (const extDevice_t *dev)
         bprintf("\n *** pico spiInternalStopDMA TX busy\n");
         dma_channel_abort(dmaTx->channel);
     }
+}
+
+void spiInternalAbortDMA(const extDevice_t *dev)
+{
+    spiInternalStopDMA(dev);
 }
 
 // Interrupt handler for SPI receive DMA completion
@@ -270,7 +283,6 @@ FAST_IRQ_HANDLER static void spiRxIrqHandler(dmaChannelDescriptor_t* descriptor)
     spiIrqHandler(dev);
 }
 
-extern dmaChannelDescriptor_t dmaDescriptors[];
 
 void spiInitBusDMA(void)
 {
@@ -315,6 +327,7 @@ void spiInitBusDMA(void)
         dmaSetHandler(DMA_CHANNEL_TO_IDENTIFIER(bus->dmaRx->channel), spiRxIrqHandler, NVIC_PRIO_SPI_DMA, 0);
 
         // We got the required resources, so we can use DMA on this bus
+        bprintf("PICO SPI init bus DMA true for device %d", device);
         bus->useDMA = true;
     }
 }
@@ -325,7 +338,7 @@ void spiInternalResetStream(dmaChannelDescriptor_t *descriptor)
     UNUSED(descriptor);
 }
 
-bool spiInternalReadWriteBufPolled(SPI_TypeDef *instance, const uint8_t *txData, uint8_t *rxData, int len)
+bool spiInternalReadWriteBufPolled(spiResource_t *instance, const uint8_t *txData, uint8_t *rxData, int len)
 {
     // TODO optimise with 16-bit transfers as per stm bus_spi_ll code
     int bytesProcessed = 0;
@@ -338,7 +351,12 @@ bool spiInternalReadWriteBufPolled(SPI_TypeDef *instance, const uint8_t *txData,
         uint8_t repeated_tx_data = 0xff; // cf. dummyTxByte in stm bus_spi_ll.c and for DMA here
         bytesProcessed = spi_read_blocking(SPI_INST(instance), repeated_tx_data, rxData, len);
     } else {
-        bprintf("\n*** unexpected spiInternalReadWriteBufPolled with no tx, rx");
+        // Just force dummy cycles
+        uint8_t repeated_tx_data = 0xff; // cf. dummyTxByte in stm bus_spi_ll.c and for DMA here
+        uint8_t dropped_rx_data;
+        for (int i = 0; i < len; i++) {
+            bytesProcessed += spi_read_blocking(SPI_INST(instance), repeated_tx_data, &dropped_rx_data, 1);
+        }
     }
 
     return bytesProcessed == len;
@@ -404,12 +422,12 @@ void spiInternalStartDMA(const extDevice_t *dev)
     dma_start_channel_mask(channelMask);
 #endif
 }
-    
+
 // DMA transfer setup and start
 void spiSequenceStart(const extDevice_t *dev)
 {
     busDevice_t *bus = dev->bus;
-    SPI_TypeDef *instance = bus->busType_u.spi.instance;
+    spiResource_t *instance = bus->busType_u.spi.instance;
     spiDevice_t *spi = &spiDevice[spiDeviceByInstance(instance)];
     bool dmaSafe = dev->useDMA;
 #if TESTING_NO_DMA
@@ -418,7 +436,7 @@ void spiSequenceStart(const extDevice_t *dev)
     uint32_t xferLen = 0;
     uint32_t segmentCount = 0;
     bus->initSegment = true;
-    
+
     // Switch bus speed
     if (dev->busType_u.spi.speed != bus->busType_u.spi.speed) {
         spiSetClockFromSpeed(SPI_INST(instance), dev->busType_u.spi.speed);
