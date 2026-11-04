@@ -616,6 +616,10 @@
 #endif
 #endif
 
+#if (TARGET_FLASH_SIZE > 128) && (defined(USE_GYRO_SPI_ICM20601) || defined(USE_GYRO_SPI_ICM20689) || defined(USE_GYRO_SPI_MPU6500))
+#define USE_GYRO_SLEW_LIMITER
+#endif
+
 #ifndef USE_ACC
 #define USE_ACC
 #endif
@@ -1091,4 +1095,10 @@ extern struct linker_symbol __fontdata_end;
 // can't yet skip restricted (e.g. RIFSC-protected) ports cleanly.
 #if !defined(ENABLE_UNUSED_PINS_INIT)
 #define ENABLE_UNUSED_PINS_INIT 1
+#endif
+
+#if !defined(ENABLE_OSD_CANVAS_SIZE_DEBUG) && (defined(OSD_CANVAS_SIZE_DEBUG) || defined(USE_OSD_CANVAS_SIZE_DEBUG))
+#define ENABLE_OSD_CANVAS_SIZE_DEBUG 1
+#elif !defined(ENABLE_OSD_CANVAS_SIZE_DEBUG)
+#define ENABLE_OSD_CANVAS_SIZE_DEBUG 0
 #endif
